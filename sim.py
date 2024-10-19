@@ -74,19 +74,13 @@ def legal_actions_by_action_resource(action_resources):
     return legal_actions
 
 
-def legal_actions_by_initiative(dex_ability_bonus, current_initiative, current_player):
-    characters_moving = dex_ability_bonus == current_initiative
-    characters_moving = characters_moving.at[(current_player + 1)%N_PLAYERS].set(FALSE)
-    return characters_moving
-
-def _legal_actions(dex_ability_bonus, current_initiative, current_player, action_resources):
+def _legal_actions(turn_tracker, action_resources):
     legal_actions = jnp.ones((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS), dtype=jnp.bool)
-
-    characters_moving = legal_actions_by_initiative(dex_ability_bonus, current_initiative, current_player)
     resources_available = legal_actions_by_action_resource(action_resources)
 
-    legal_actions = legal_actions & characters_moving.unsqueeze(-1) & resources_available
+    legal_actions = legal_actions & turn_tracker.characters_turn.unsqueeze(-1) & resources_available
     return legal_actions
+
 
 class TurnTracker:
 
@@ -100,6 +94,11 @@ class TurnTracker:
     @property
     def initiative(self):
         return self.initiative_scores[jnp.arange(N_PLAYERS), self.turn_order[jnp.arange(N_PLAYERS), self.cohort]][self.party]
+
+    @property
+    def characters_turn(self):
+        turn_mask = self.initiative_scores == self.initiative
+        return turn_mask.at[(self.party + 1) % N_PLAYERS].set(False)
 
     def _next_cohort(self):
 

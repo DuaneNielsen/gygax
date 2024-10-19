@@ -3,7 +3,7 @@ from pgx.experimental import act_randomly
 import jax
 import jax.numpy as jnp
 from sim import ACTION_RESOURCE_TABLE, legal_actions_by_action_resource, N_PLAYERS, N_ACTIONS, MAX_PARTY_SIZE, Actions
-from sim import legal_actions_by_initiative, TurnTracker
+from sim import TurnTracker
 
 
 def test_sim():
@@ -42,38 +42,6 @@ def test_action_resource_table():
             [1, 1, 1, 0], [1, 1, 1, 0]
         ]))
 
-
-def test_legal_initiative():
-    dex_ability_bonus = jnp.array([3, 0, -1, 3])
-    dex_ability_bonus = jnp.stack([dex_ability_bonus, dex_ability_bonus])
-
-    current_initiative = jnp.array([3])
-    current_player = jnp.array([0])
-
-    characters_moving = legal_actions_by_initiative(dex_ability_bonus, current_initiative, current_player)
-
-    assert characters_moving.shape == (2, 4)
-
-    assert jnp.all(characters_moving == jnp.array([
-        [1, 0, 0, 1],
-        [0, 0, 0, 0]
-    ], dtype=jnp.bool))
-
-    current_player = jnp.array([1])
-    characters_moving = legal_actions_by_initiative(dex_ability_bonus, current_initiative, current_player)
-
-    assert jnp.all(characters_moving == jnp.array([
-        [0, 0, 0, 0],
-        [1, 0, 0, 1]
-    ], dtype=jnp.bool))
-
-    current_initiative = jnp.array([-1])
-    characters_moving = legal_actions_by_initiative(dex_ability_bonus, current_initiative, current_player)
-
-    assert jnp.all(characters_moving == jnp.array([
-        [0, 0, 0, 0],
-        [0, 0, 1, 0]
-    ], dtype=jnp.bool))
 
 
 def test_next_cohort():
@@ -115,31 +83,58 @@ def test_next_turn():
     for _ in range(3):
         assert tt.party == 0
         assert tt.initiative == 3
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [1, 0, 0, 1],
+            [0, 0, 0, 0]
+        ], dtype=jnp.bool))
 
         tt.next_turn()
         assert tt.party == 1
         assert tt.initiative == 3
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [0, 0, 0, 0],
+            [1, 0, 0, 0]
+        ], dtype=jnp.bool))
 
         tt.next_turn()
         assert tt.party == 1
         assert tt.initiative == 1
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [0, 0, 0, 0],
+            [0, 0, 0, 1]
+        ], dtype=jnp.bool))
 
         tt.next_turn()
         assert tt.party == 0
         assert tt.initiative == 0
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [0, 1, 0, 0],
+            [0, 0, 0, 0]
+        ], dtype=jnp.bool))
 
         tt.next_turn()
         assert tt.party == 1
         assert tt.initiative == 0
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [0, 0, 0, 0],
+            [0, 0, 1, 0]
+        ], dtype=jnp.bool))
 
         tt.next_turn()
         assert tt.party == 0
         assert tt.initiative == -1
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [0, 0, 1, 0],
+            [0, 0, 0, 0]
+        ], dtype=jnp.bool))
 
         tt.next_turn()
         assert tt.party == 1
         assert tt.initiative == -1, f'{tt.initiative}'
-
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [0, 0, 0, 0],
+            [0, 1, 0, 0]
+        ], dtype=jnp.bool))
         tt.next_turn()
 
 
