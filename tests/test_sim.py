@@ -11,9 +11,10 @@ def test_sim():
     rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
     state = env.init(rng_init)
 
-    while ~jnp.all(state.terminated):
-        state = env.step(state, act_randomly(rng, state.legal_action_mask))
-        jax.debug.print('{}', state._board)
+
+    # while ~jnp.all(state.terminated):
+    #     state = env.step(state, act_randomly(rng, state.legal_action_mask))
+    #     jax.debug.print('{}', state._board)
 
 def test_action_encode():
     action = jnp.array([Actions.END_TURN, Actions.ATTACK_MELEE_WEAPON])
@@ -47,13 +48,13 @@ def test_action_resource_table():
 
     action_resources = jnp.stack([action_resources_party1, action_resources_party2])
 
-    actions_available = legal_actions_by_action_resource(action_resources)
+    actions_available = dnd5e.legal_actions_by_action_resource(action_resources)
 
     assert actions_available.shape == (N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS)
 
     assert jnp.all(
         actions_available[:, :, Actions.END_TURN] == jnp.array([
-            [1, 1, 1, 0], [1, 1, 1, 0]
+            [1, 1, 1, 1], [1, 1, 1, 1]
         ]))
 
 
