@@ -3,15 +3,40 @@ import jax.numpy as jnp
 from jax import Array
 from constants import N_PLAYERS, MAX_PARTY_SIZE
 
+"""
+the scheme for controlling the flow of initiative is
+
+1. assign each character an initiative score based on
+
+    initiative = dex proficiency bonus
+
+    characters may have the same initiative number
+
+    higher initiative goes first
+
+    if tied: player 0 (the PC's) always go before player 1 (the NPC's)
+
+2.  on_character_start is set when a character gains tha ability to act,
+
+3.  PCs continue to choose actions and step the environment until all action resources are exhausted
+    at the current initiative number, then NPCs can choose actions for the NPCs at the same number
+
+4.  Once all actions are exhausted, play moves to the next valid initiative number
+
+5.  When the turn is over, the initiative is reset to the highest number
+
+"""
+
 
 @chex.dataclass
 class TurnTracker:
-    initiative_scores: chex.ArrayDevice
-    turn_order: chex.ArrayDevice
-    end_turn: chex.ArrayDevice
-    party: chex.ArrayDevice
-    cohort: chex.ArrayDevice
-    turn: chex.ArrayDevice
+    initiative_scores: chex.ArrayDevice  # higher goes first
+    turn_order: chex.ArrayDevice # index array that sorts parties by initiative
+    end_turn: chex.ArrayDevice # if the end_turn button has been pressed
+    party: chex.ArrayDevice # current party
+    cohort: chex.ArrayDevice # which cohort in each party is current
+    turn: chex.ArrayDevice # which turn each party is on
+    on_character_start: chex.ArrayDevice  # trigger for events that occur on start of character turn
 
     @property
     def initiative(self):
@@ -25,13 +50,18 @@ class TurnTracker:
 
 
 def init(dex_ability_bonus):
+    initiative_scores = dex_ability_bonus
+    on_character_start = jnp.zeros_like(initiative_scores, dtype=jnp.bool)
+    on_character_start = on_character_start.at[0].set(initiative_scores[0].max() == initiative_scores[0])
+
     return TurnTracker(
-        initiative_scores=dex_ability_bonus,
-        turn_order=jnp.argsort(dex_ability_bonus, axis=-1, descending=True),
-        end_turn=jnp.zeros_like(dex_ability_bonus, dtype=jnp.bool_),
+        initiative_scores=initiative_scores,
+        turn_order=jnp.argsort(initiative_scores, axis=-1, descending=True),
+        end_turn=jnp.zeros_like(initiative_scores, dtype=jnp.bool),
         party=jnp.zeros(1, dtype=jnp.int32),
         cohort=jnp.zeros(N_PLAYERS, dtype=jnp.int32),
-        turn=jnp.zeros(N_PLAYERS, dtype=jnp.int32)
+        turn=jnp.zeros(N_PLAYERS, dtype=jnp.int32),
+        on_character_start=on_character_start
     )
 
 
@@ -48,6 +78,7 @@ def _next_cohort(turn_tracker, actions_remain: Array):
     # advance only if all characters have ended turn
     turn_tracker.cohort = jnp.where(actions_remain, turn_tracker.cohort, next_cohort)
     turn_tracker.turn = jnp.where(actions_remain, turn_tracker.turn, next_turn)
+
     return turn_tracker
 
 
@@ -65,6 +96,21 @@ def next_turn(turn_tracker, character_end_turn):
     turn_order = jnp.argmin(turn_tracker.turn)
     next_party = jnp.where(turn_tracker.turn[0] == turn_tracker.turn[1], party_order, turn_order)
 
-    # update only if the end_turn button was pressed for all characters at the current initiative
+    # update only if the end_turn button was pressed for all characters
     turn_tracker.party = jnp.where(actions_remain, turn_tracker.party, next_party)
+
+    # set the on_character_start for characters that just became active
+    turn_tracker.on_character_start = jnp.where(actions_remain, turn_tracker.on_character_start, turn_tracker.characters_turn)
+
+    return turn_tracker
+
+
+def end_on_character_start(turn_tracker):
+    """
+    This should be called to clear the on_character_start flags after all events
+    triggered on the start of a characters turn have been processed
+    :param turn_tracker:
+    :return: turn_tracker
+    """
+    turn_tracker.on_character_start = jnp.zeros_like(turn_tracker.on_character_start)
     return turn_tracker
