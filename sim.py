@@ -4,14 +4,9 @@ import jax.numpy as jnp
 import pgx.core as core
 from pgx._src.struct import dataclass
 from pgx._src.types import Array, PRNGKey
+from constants import *
+import turn_tracker
 
-FALSE = jnp.bool_(False)
-TRUE = jnp.bool_(True)
-
-MAX_PARTY_SIZE = 4
-N_PLAYERS = 2
-N_WEAPON_SLOTS = 2
-N_ABILITIES = 6
 
 """
 This simulation is deterministic.
@@ -28,48 +23,12 @@ It also allows us to use alphazero without needing to add "chance nodes" for sto
 which would significantly complicate things 
 """
 
-from enum import IntEnum
-
-
-class Actions(IntEnum):
-    END_TURN = 0
-    DASH = 1
-    ATTACK_MELEE_WEAPON = 3
-    ATTACK_RANGED_WEAPON = 4
-
-
-class ActionResourceUsageType(IntEnum):
-    END_TURN = 0
-    ACTION = 1
-    BONUS_ACTION = 2
-    ATTACK = 3
-    SPELL_SLOT_1 = 4
-
-class ActionResourceType(IntEnum):
-    ACTION = 0
-    BONUS_ACTION = 1
-    ATTACK = 2
-
-N_ACTIONS = len(Actions)
-N_ACTION_RESOURCE_TYPES = len(ActionResourceUsageType)
-
-action_resource_table = {
-    Actions.END_TURN: ActionResourceUsageType.END_TURN,
-    Actions.DASH: ActionResourceUsageType.ACTION,
-    Actions.ATTACK_MELEE_WEAPON: ActionResourceUsageType.ATTACK,
-    Actions.ATTACK_RANGED_WEAPON: ActionResourceUsageType.ATTACK
-}
-
-ACTION_RESOURCE_TABLE = jnp.zeros((N_ACTIONS), dtype=jnp.bool_)
-for action, action_resource in action_resource_table.items():
-    ACTION_RESOURCE_TABLE.at[action].set(action_resource)
-
 
 def legal_actions_by_action_resource(action_resources):
     legal_actions = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS), dtype=jnp.bool)
 
     any_actions_remaining = (action_resources > 0).any(-1)
-    legal_actions = legal_actions.at[:, :, 0].set(any_actions_remaining)
+    legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(any_actions_remaining)
     # action_available = ACTION_RESOURCE_TABLE & action_resources.reshape(1, 1, 4)
     return legal_actions
 
@@ -82,45 +41,8 @@ def _legal_actions(turn_tracker, action_resources):
     return legal_actions
 
 
-class TurnTracker:
 
-    def __init__(self, dex_ability_bonus):
-        self.initiative_scores = dex_ability_bonus
-        self.turn_order = jnp.argsort(self.initiative_scores, axis=-1, descending=True)
-        self.party: Array = jnp.zeros(1, dtype=jnp.int32)
-        self.cohort: Array = jnp.zeros(2, dtype=jnp.int32)
-        self.turn: Array = jnp.zeros(2, dtype=jnp.int32)
 
-    @property
-    def initiative(self):
-        return self.initiative_scores[jnp.arange(N_PLAYERS), self.turn_order[jnp.arange(N_PLAYERS), self.cohort]][self.party]
-
-    @property
-    def characters_turn(self):
-        turn_mask = self.initiative_scores == self.initiative
-        return turn_mask.at[(self.party + 1) % N_PLAYERS].set(False)
-
-    def _next_cohort(self):
-
-        # if more than 1 character has the same initiative, we must skip over them
-        n_simultaneous_characters = jnp.sum(self.initiative_scores[self.party] == self.initiative)
-        next_cohort = (self.cohort[self.party] + n_simultaneous_characters) % MAX_PARTY_SIZE
-        turn = jnp.where(next_cohort == 0, self.turn[self.party] + 1, self.turn[self.party])
-
-        # only advance the current party
-        self.cohort = self.cohort.at[self.party].set(next_cohort)
-        self.turn = self.turn.at[self.party].set(turn)
-        return self
-
-    def next_turn(self):
-        # advance the current party
-        self._next_cohort()
-
-        # next party is the one with highest initiative or lowest turn
-        party_init = self.initiative_scores[jnp.arange(N_PLAYERS), self.turn_order[jnp.arange(N_PLAYERS), self.cohort]]
-        party_order = jnp.argmax(party_init)
-        turn_order = jnp.argmin(self.turn)
-        self.party = jnp.where(self.turn[0] == self.turn[1], party_order, turn_order)
 
 def encode_action(action, source_party, source_character, target_party, target_slot):
     return
@@ -157,30 +79,24 @@ class Party:
     actions_start_turn : Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32)  # number of actions at the start of the turn
     actions_remaining : Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32) # number of actions remaining
 
-@dataclass
+
 class Scene:
-    player_pos: Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32)
-    party_0: Party = Party()
-    party_1: Party = Party()
-    current_initiative: Array = jnp.int32(0)
-    initiative_score: Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32)
+    def __init__(self, party: Party):
+        self.player_pos: Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32)
+        self.party: Party = party
+        self.turn_tracker: turn_tracker.init(dex_ability_bonus=party.ability_bonus[:, :, Abilities.DEX])
 
 
-@dataclass
 class State(core.State):
-    current_player: Array = jnp.int32(0)
-    observation: Array = jnp.zeros((3, 3, 2), dtype=jnp.bool_)
-    rewards: Array = jnp.float32([0.0, 0.0])
-    terminated: Array = FALSE
-    truncated: Array = FALSE
-    legal_action_mask: Array = jnp.ones(9, dtype=jnp.bool_)
-    _step_count: Array = jnp.int32(0)
-    # --- Tic-tac-toe specific ---
-    _turn: Array = jnp.int32(0)
-    # 0 1 2
-    # 3 4 5
-    # 6 7 8
-    _board: Array = -jnp.ones(9, jnp.int32)  # -1 (empty), 0, 1
+
+    def __init__(self):
+        self.rewards: Array = jnp.float32([0.0, 0.0])
+        self.terminated: Array = FALSE
+        self.truncated: Array = FALSE
+        self._step_count: Array = jnp.int32(0)
+        self.scene = Scene()
+        observation: Array = jnp.zeros((3, 3, 2), dtype=jnp.bool_)
+        legal_action_mask: Array = _legal_actions(self.scene.turn_tracker, self.actions_remaining)
 
     @property
     def env_id(self) -> core.EnvId:
@@ -245,7 +161,7 @@ class TicTacToe(core.Env):
 
 
 def _init(rng: PRNGKey) -> State:
-    current_player = jnp.int32(jax.random.bernoulli(rng))
+
     return State(current_player=current_player)  # type:ignore
 
 

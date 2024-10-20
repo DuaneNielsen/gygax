@@ -2,8 +2,8 @@ import sim
 from pgx.experimental import act_randomly
 import jax
 import jax.numpy as jnp
-from sim import ACTION_RESOURCE_TABLE, legal_actions_by_action_resource, N_PLAYERS, N_ACTIONS, MAX_PARTY_SIZE, Actions
-from sim import TurnTracker
+from constants import ACTION_RESOURCE_TABLE, N_PLAYERS, N_ACTIONS, MAX_PARTY_SIZE, Actions, FALSE, TRUE
+import turn_tracker
 
 
 def test_sim():
@@ -50,26 +50,31 @@ def test_next_cohort():
         [3, 0, -1, 3]
     ])
 
-    turn_tracker = TurnTracker(dex_ability_bonus)
-    assert jnp.all(turn_tracker.cohort == jnp.zeros(2, dtype=jnp.int32))
-    assert jnp.all(turn_tracker.turn_order == jnp.array([0, 3, 1, 2]))
-    assert jnp.all(turn_tracker.turn == jnp.all(jnp.zeros(2, dtype=jnp.int32)))
-    assert turn_tracker.initiative == 3
+    tt = turn_tracker.init(dex_ability_bonus)
+    assert jnp.all(tt.cohort == jnp.zeros(2, dtype=jnp.int32))
+    assert jnp.all(tt.turn_order == jnp.array([0, 3, 1, 2]))
+    assert jnp.all(tt.turn == jnp.all(jnp.zeros(2, dtype=jnp.int32)))
+    assert tt.initiative == 3
 
-    turn_tracker = turn_tracker._next_cohort()
-    assert turn_tracker.initiative == 0
-    assert turn_tracker.cohort[turn_tracker.party] == 2
-    assert turn_tracker.turn[turn_tracker.party] == 0
+    tt = turn_tracker._next_cohort(tt, actions_remain=TRUE)
+    assert tt.initiative == 3
+    assert tt.cohort[tt.party] == 0
+    assert tt.turn[tt.party] == 0
 
-    turn_tracker = turn_tracker._next_cohort()
-    assert turn_tracker.cohort[turn_tracker.party] == 3
-    assert turn_tracker.initiative == -1
-    assert turn_tracker.turn[turn_tracker.party] == 0
+    tt = turn_tracker._next_cohort(tt, actions_remain=FALSE)
+    assert tt.initiative == 0
+    assert tt.cohort[tt.party] == 2
+    assert tt.turn[tt.party] == 0
 
-    turn_tracker = turn_tracker._next_cohort()
-    assert turn_tracker.cohort[turn_tracker.party] == 0
-    assert turn_tracker.initiative == 3
-    assert turn_tracker.turn[turn_tracker.party] == 1
+    tt = turn_tracker._next_cohort(tt, actions_remain=FALSE)
+    assert tt.cohort[tt.party] == 3
+    assert tt.initiative == -1
+    assert tt.turn[tt.party] == 0
+
+    tt = turn_tracker._next_cohort(tt, actions_remain=FALSE)
+    assert tt.cohort[tt.party] == 0
+    assert tt.initiative == 3
+    assert tt.turn[tt.party] == 1
 
 
 def test_next_turn():
@@ -78,7 +83,7 @@ def test_next_turn():
         [3, -1, 0, 1]
     ])
 
-    tt = TurnTracker(dex_ability_bonus)
+    tt = turn_tracker.init(dex_ability_bonus)
 
     for _ in range(3):
         assert tt.party == 0
@@ -88,7 +93,23 @@ def test_next_turn():
             [0, 0, 0, 0]
         ], dtype=jnp.bool))
 
-        tt.next_turn()
+        character_end_turn = jnp.array([
+            [1, 0, 0, 0],
+            [0, 0, 0, 0]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        assert tt.party == 0
+        assert tt.initiative == 3
+        assert jnp.all(tt.characters_turn == jnp.array([
+            [1, 0, 0, 1],
+            [0, 0, 0, 0]
+        ], dtype=jnp.bool))
+
+        character_end_turn = jnp.array([
+            [1, 0, 0, 1],
+            [0, 0, 0, 0]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
         assert tt.party == 1
         assert tt.initiative == 3
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -96,7 +117,11 @@ def test_next_turn():
             [1, 0, 0, 0]
         ], dtype=jnp.bool))
 
-        tt.next_turn()
+        character_end_turn = jnp.array([
+            [1, 0, 0, 1],
+            [1, 0, 0, 0]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
         assert tt.party == 1
         assert tt.initiative == 1
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -104,7 +129,11 @@ def test_next_turn():
             [0, 0, 0, 1]
         ], dtype=jnp.bool))
 
-        tt.next_turn()
+        character_end_turn = jnp.array([
+            [1, 0, 0, 1],
+            [1, 0, 0, 1]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
         assert tt.party == 0
         assert tt.initiative == 0
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -112,7 +141,11 @@ def test_next_turn():
             [0, 0, 0, 0]
         ], dtype=jnp.bool))
 
-        tt.next_turn()
+        character_end_turn = jnp.array([
+            [1, 1, 0, 1],
+            [1, 0, 0, 1]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
         assert tt.party == 1
         assert tt.initiative == 0
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -120,7 +153,11 @@ def test_next_turn():
             [0, 0, 1, 0]
         ], dtype=jnp.bool))
 
-        tt.next_turn()
+        character_end_turn = jnp.array([
+            [1, 1, 0, 1],
+            [1, 0, 1, 1]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
         assert tt.party == 0
         assert tt.initiative == -1
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -128,13 +165,22 @@ def test_next_turn():
             [0, 0, 0, 0]
         ], dtype=jnp.bool))
 
-        tt.next_turn()
+        character_end_turn = jnp.array([
+            [1, 1, 1, 1],
+            [1, 0, 1, 1]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
         assert tt.party == 1
         assert tt.initiative == -1, f'{tt.initiative}'
         assert jnp.all(tt.characters_turn == jnp.array([
             [0, 0, 0, 0],
             [0, 1, 0, 0]
         ], dtype=jnp.bool))
-        tt.next_turn()
+
+        character_end_turn = jnp.array([
+            [1, 1, 1, 1],
+            [1, 1, 1, 1]
+        ])
+        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
 
 
