@@ -82,16 +82,21 @@ def _next_cohort(turn_tracker, actions_remain: Array):
     return turn_tracker
 
 
-def next_turn(turn_tracker, character_end_turn):
-    # have any characters not ended their turn?
-    actions_remain = jnp.any(turn_tracker.characters_turn & ~character_end_turn)
+def next_turn(turn_tracker, end_turn_party, end_turn_character):
+
+    # if all characters ended turn, reset the counter
+    turn_tracker.end_turn = jnp.where(jnp.all(turn_tracker.end_turn), jnp.zeros_like(turn_tracker.end_turn), turn_tracker.end_turn)
+    turn_tracker.end_turn = turn_tracker.end_turn.at[end_turn_party, end_turn_character].set(jnp.bool(True))
+
+    # have any characters in the current round not ended their turn?
+    actions_remain = jnp.any(turn_tracker.characters_turn & ~turn_tracker.end_turn)
 
     # advance the current party
     turn_tracker = _next_cohort(turn_tracker, actions_remain)
 
     # next party is the one with highest initiative or lowest turn
-    party_init = turn_tracker.initiative_scores[
-        jnp.arange(N_PLAYERS), turn_tracker.turn_order[jnp.arange(N_PLAYERS), turn_tracker.cohort]]
+    R_PLAYERS = jnp.arange(N_PLAYERS)
+    party_init = turn_tracker.initiative_scores[R_PLAYERS, turn_tracker.turn_order[R_PLAYERS, turn_tracker.cohort]]
     party_order = jnp.argmax(party_init)
     turn_order = jnp.argmin(turn_tracker.turn)
     next_party = jnp.where(turn_tracker.turn[0] == turn_tracker.turn[1], party_order, turn_order)

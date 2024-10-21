@@ -32,9 +32,9 @@ def legal_actions_by_action_resource(action_resources):
 
 
 def _legal_actions(scene):
-    legal_actions = jnp.ones((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS), dtype=jnp.bool)
-    resources_available = legal_actions_by_action_resource(scene.party.action_resources)
-    legal_actions = legal_actions & scene.turn_tracker.characters_turn[..., jnp.newaxis] & resources_available
+    legal_actions = jnp.ones((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.bool)
+    legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)[..., jnp.newaxis, jnp.newaxis]
+    legal_actions = legal_actions & scene.turn_tracker.characters_turn[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
     return legal_actions
 
 
@@ -158,12 +158,49 @@ def _init(rng: jax.random.PRNGKey) -> State:
 
     return State(
         scene=scene,
-        legal_action_mask=legal_action_mask
+        legal_action_mask=legal_action_mask.ravel()
     )
 
 
 def _observe(state: State, player_id: Array) -> Array:
     return state.observation
+
+
+def _win_check(state):
+    party_killed = jnp.all(state.scene.party.hitpoints <= 0., axis=1)
+    return jnp.any(party_killed), ~jnp.argmax(party_killed)
+
+
+def end_turn(state, action, source_party, source_character, target_party, target_slot):
+    new_tt = turn_tracker.next_turn(state.scene.turn_tracker, source_party, source_character)
+    f = lambda new, old: jnp.where(action==Actions.END_TURN, new, old)
+    state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
+    return state
+
+
+def _step(state: State, action: Array) -> State:
+    action, source_party, source_character, target_party, target_slot = decode_action(action)
+
+    # actions that take effect on the turn start occur before this line
+    state.scene.turn_tracker = turn_tracker.end_on_character_start(state.scene.turn_tracker)
+
+    state = end_turn(state, action, source_party, source_character, target_party, target_slot)
+
+    game_over, winner = _win_check(state)
+
+    reward = jax.lax.cond(
+        game_over,
+        lambda: jnp.float32([-1, -1]).at[winner].set(1),
+        lambda: jnp.zeros(2, jnp.float32),
+    )
+
+    legal_action_mask: Array = _legal_actions(state.scene)
+
+    return state.replace(
+        legal_action_mask=legal_action_mask.ravel(),  # ravel flattens the action_mask
+        rewards=reward,
+        terminated=game_over
+    )
 
 
 class DND5E(core.Env):
@@ -193,26 +230,3 @@ class DND5E(core.Env):
     @property
     def num_players(self) -> int:
         return 2
-
-
-def _step(state: State, action: Array) -> State:
-    state = state.replace(_board=state._board.at[action].set(state._turn))  # type: ignore
-    won = _win_check(state._board, state._turn)
-    reward = jax.lax.cond(
-        won,
-        lambda: jnp.float32([-1, -1]).at[state.current_player].set(1),
-        lambda: jnp.zeros(2, jnp.float32),
-    )
-    return state.replace(  # type: ignore
-        current_player=(state.current_player + 1) % 2,
-        legal_action_mask=state._board < 0,
-        rewards=reward,
-        terminated=won | jnp.all(state._board != -1),
-        _turn=(state._turn + 1) % 2,
-    )
-
-
-def _win_check(board, turn) -> Array:
-    idx = jnp.int32(
-        [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]])  # type: ignore
-    return ((board[idx] == turn).all(axis=1)).any()

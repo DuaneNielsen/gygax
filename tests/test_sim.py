@@ -5,12 +5,20 @@ import jax.numpy as jnp
 from constants import ACTION_RESOURCE_TABLE, N_PLAYERS, N_ACTIONS, MAX_PARTY_SIZE, Actions, FALSE, TRUE
 import turn_tracker
 
-
 def test_sim():
     env = dnd5e.DND5E()
     rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
     state = env.init(rng_init)
 
+    action = dnd5e.encode_action(Actions.END_TURN, 0, 0, 0, 0)
+    state = env.step(state, action)
+
+    # chack vmap
+    init = jax.vmap(env.init)
+    rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
+    rng_init_batch = jax.random.split(rng_init, 2)
+    state = init(rng_init_batch)
+    print(state.scene.party.hitpoints.shape)
 
     # while ~jnp.all(state.terminated):
     #     state = env.step(state, act_randomly(rng, state.legal_action_mask))
@@ -141,11 +149,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # first end_turn action
-        character_end_turn = jnp.array([
-            [1, 0, 0, 0],
-            [0, 0, 0, 0]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 0, 0)
         assert tt.party == 0
         assert tt.initiative == 3
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -159,11 +163,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # second end turn action
-        character_end_turn = jnp.array([
-            [1, 0, 0, 1],
-            [0, 0, 0, 0]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 0, 3)
         assert tt.party == 1
         assert tt.initiative == 3
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -177,11 +177,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # third end turn action
-        character_end_turn = jnp.array([
-            [1, 0, 0, 1],
-            [1, 0, 0, 0]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 1, 0)
         assert tt.party == 1
         assert tt.initiative == 1
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -195,11 +191,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # fourth end turn action
-        character_end_turn = jnp.array([
-            [1, 0, 0, 1],
-            [1, 0, 0, 1]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 1, 3)
         assert tt.party == 0
         assert tt.initiative == 0
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -213,11 +205,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # fifth end turn action
-        character_end_turn = jnp.array([
-            [1, 1, 0, 1],
-            [1, 0, 0, 1]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 0, 1)
         assert tt.party == 1
         assert tt.initiative == 0
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -231,11 +219,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # sixth end turn action
-        character_end_turn = jnp.array([
-            [1, 1, 0, 1],
-            [1, 0, 1, 1]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 1, 2)
         assert tt.party == 0
         assert tt.initiative == -1
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -249,11 +233,7 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # seventh end turn action
-        character_end_turn = jnp.array([
-            [1, 1, 1, 1],
-            [1, 0, 1, 1]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 0, 2)
         assert tt.party == 1
         assert tt.initiative == -1, f'{tt.initiative}'
         assert jnp.all(tt.characters_turn == jnp.array([
@@ -267,9 +247,5 @@ def test_next_turn():
         tt = turn_tracker.end_on_character_start(tt)
 
         # final end turn
-        character_end_turn = jnp.array([
-            [1, 1, 1, 1],
-            [1, 1, 1, 1]
-        ])
-        tt = turn_tracker.next_turn(tt, character_end_turn=character_end_turn)
+        tt = turn_tracker.next_turn(tt, 1, 1)
 
