@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from enum import IntEnum
+from enum import StrEnum, Enum, auto, IntEnum
 
 
 FALSE = jnp.bool_(False)
@@ -58,3 +58,17 @@ action_resource_table = {
 ACTION_RESOURCE_TABLE = jnp.zeros((N_ACTIONS), dtype=jnp.bool_)
 for action, action_resource in action_resource_table.items():
     ACTION_RESOURCE_TABLE.at[action].set(action_resource)
+
+
+class ConfigItems(StrEnum):
+    PARTY = auto()
+
+
+class Party(IntEnum):
+    PC = 0
+    NPC = 1
+
+
+class CharacterStats(StrEnum):
+    ABILITIES = auto()
+    HITPOINTS = auto()

@@ -3,6 +3,7 @@ import jax.numpy as jnp
 
 import pgx.core as core
 from constants import *
+import constants
 import turn_tracker
 import chex
 from pgx.core import Array
@@ -33,8 +34,9 @@ def legal_actions_by_action_resource(action_resources):
 
 def _legal_actions(scene):
     legal_actions = jnp.ones((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.bool)
-    legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)[..., jnp.newaxis, jnp.newaxis]
-    legal_actions = legal_actions & scene.turn_tracker.characters_turn[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
+    legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)[
+        ..., jnp.newaxis, jnp.newaxis]
+    legal_actions = legal_actions & scene.turn_tracker.characters_acting[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
     return legal_actions
 
 
@@ -80,10 +82,11 @@ def init_weapon_slots():
 
 @chex.dataclass
 class Party:
+    pos: chex.ArrayDevice
     hitpoints: chex.ArrayDevice  # hit points
     armor_class: chex.ArrayDevice  # armor class
     proficiency_bonus: chex.ArrayDevice  # proficiency bonus
-    ability_bonus: chex.ArrayDevice  # ability bonus for each stat
+    ability_modifier: chex.ArrayDevice  # ability bonus for each stat
     class_ability_bonus_idx: chex.ArrayDevice  # class ability index 0: STR, 1: DEX, 2: CON,
     weapons: WeaponSlots
     actions_resources_start_turn: chex.ArrayDevice  # number of actions at the start of the turn
@@ -92,10 +95,11 @@ class Party:
 
 def init_party():
     return Party(
+        pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
         hitpoints=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.float32),
         armor_class=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
         proficiency_bonus=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),  # proficiency bonus
-        ability_bonus=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ABILITIES), dtype=jnp.int32),
+        ability_modifier=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ABILITIES), dtype=jnp.int32),
         class_ability_bonus_idx=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
         weapons=init_weapon_slots(),
         actions_resources_start_turn=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32),
@@ -105,31 +109,45 @@ def init_party():
 
 @chex.dataclass
 class Scene:
-    player_pos: chex.ArrayDevice
     party: Party
     turn_tracker: turn_tracker.TurnTracker
 
 
-def init_scene(ability_bonus):
+
+from default_config import default_config
+
+
+def init_scene(config=None):
+    config = config if config is not None else default_config
+    party = init_party()
+    party_config = config[ConfigItems.PARTY]
+    for p in constants.Party:
+        for i, (name, character_sheet) in enumerate(party_config[p].items()):
+            for ability in Abilities:
+                ability_score = character_sheet[CharacterStats.ABILITIES][ability]
+                ability_modifier = (ability_score - 10) // 2
+                party.ability_modifier = party.ability_modifier.at[p.value, i, ability.value].set(ability_modifier)
+
+    dex_ability_bonus = party.ability_modifier[:, :, Abilities.DEX]
     return Scene(
-        player_pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
-        party=init_party(),
-        turn_tracker=turn_tracker.init(dex_ability_bonus=ability_bonus[:, :, Abilities.DEX])
+        party=party,
+        turn_tracker=turn_tracker.init(dex_ability_bonus=dex_ability_bonus)
     )
 
 
 from pgx._src.struct import dataclass
 
+
 @dataclass
 class State:
     # dnd5e specific
-    scene: Scene = init_scene(jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ABILITIES)))
+    scene: Scene
     legal_action_mask: Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS))
     observation: Array = jnp.zeros((3, 3, 2), dtype=jnp.bool_)
     rewards: Array = jnp.float32([0.0, 0.0])
     terminated: Array = FALSE
     truncated: Array = FALSE
-    _step_count: Array = jnp.int32(0)
+    _step_count: Array = jnp.zeros((1, ), dtype=jnp.int32)
 
     @property
     def current_player(self):
@@ -144,16 +162,8 @@ class State:
         return "5e_srd_dd_style"
 
 
-def _init(rng: jax.random.PRNGKey) -> State:
-    ability_bonus=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ABILITIES),dtype=jnp.int32)
-    ability_bonus = ability_bonus.at[:, :, Abilities.DEX].set( jnp.array([
-        [3, 0, -1, 3],
-        [3, -1, 0, 1]
-    ]))
-
-    scene = init_scene(
-        ability_bonus=ability_bonus
-    )
+def _init(rng: jax.random.PRNGKey, config) -> State:
+    scene = init_scene(config)
     legal_action_mask: Array = _legal_actions(scene)
 
     return State(
@@ -173,7 +183,7 @@ def _win_check(state):
 
 def end_turn(state, action, source_party, source_character, target_party, target_slot):
     new_tt = turn_tracker.next_turn(state.scene.turn_tracker, source_party, source_character)
-    f = lambda new, old: jnp.where(action==Actions.END_TURN, new, old)
+    f = lambda new, old: jnp.where(action == Actions.END_TURN, new, old)
     state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
     return state
 
@@ -207,8 +217,8 @@ class DND5E(core.Env):
     def __init__(self):
         super().__init__()
 
-    def _init(self, key: jax.random.PRNGKey) -> State:
-        return _init(key)
+    def _init(self, key: jax.random.PRNGKey, config=None) -> State:
+        return _init(key, config)
 
     def _step(self, state: core.State, action: Array, key) -> State:
         del key

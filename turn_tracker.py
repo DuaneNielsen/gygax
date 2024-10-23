@@ -40,13 +40,21 @@ class TurnTracker:
 
     @property
     def initiative(self):
-        return self.initiative_scores[jnp.arange(N_PLAYERS), self.turn_order[jnp.arange(N_PLAYERS), self.cohort]][
-            self.party]
+        leading_dim = self.initiative_scores.shape[:-2]
+        trailing_dim = self.initiative_scores.shape[-2:]
+        leading_range = [jnp.arange(n) for n in leading_dim]
+        party = self.party[*leading_range].squeeze()
+        cohort = self.cohort[*leading_range, party].squeeze()
+        turn_order = self.turn_order[*leading_range, party, cohort].squeeze()
+        return self.initiative_scores[*leading_range, party, turn_order]
 
     @property
-    def characters_turn(self):
-        turn_mask = self.initiative_scores == self.initiative
-        return turn_mask.at[(self.party + 1) % N_PLAYERS].set(False)
+    def characters_acting(self):
+        leading_dim = self.initiative_scores.shape[:-2]
+        leading_range = [jnp.arange(n) for n in leading_dim]
+        turn_mask = self.initiative_scores == self.initiative.reshape(leading_dim + (1, 1))
+        turn_mask = turn_mask.at[*leading_range, (self.party + 1) % N_PLAYERS].set(False)  # set non active party to false
+        return turn_mask
 
 
 def init(dex_ability_bonus):
@@ -89,7 +97,7 @@ def next_turn(turn_tracker, end_turn_party, end_turn_character):
     turn_tracker.end_turn = turn_tracker.end_turn.at[end_turn_party, end_turn_character].set(jnp.bool(True))
 
     # have any characters in the current round not ended their turn?
-    actions_remain = jnp.any(turn_tracker.characters_turn & ~turn_tracker.end_turn)
+    actions_remain = jnp.any(turn_tracker.characters_acting & ~turn_tracker.end_turn)
 
     # advance the current party
     turn_tracker = _next_cohort(turn_tracker, actions_remain)
@@ -105,7 +113,7 @@ def next_turn(turn_tracker, end_turn_party, end_turn_character):
     turn_tracker.party = jnp.where(actions_remain, turn_tracker.party, next_party)
 
     # set the on_character_start for characters that just became active
-    turn_tracker.on_character_start = jnp.where(actions_remain, turn_tracker.on_character_start, turn_tracker.characters_turn)
+    turn_tracker.on_character_start = jnp.where(actions_remain, turn_tracker.on_character_start, turn_tracker.characters_acting)
 
     return turn_tracker
 
