@@ -2,7 +2,7 @@ import dnd5e
 from pgx.experimental import act_randomly
 import jax
 import jax.numpy as jnp
-from constants import ACTION_RESOURCE_TABLE, N_PLAYERS, N_ACTIONS, MAX_PARTY_SIZE, Actions, FALSE, TRUE
+from constants import *
 import turn_tracker
 from constants import Abilities
 
@@ -20,11 +20,29 @@ def test_sim():
     action = dnd5e.encode_action(Actions.END_TURN, 0, 2, 0, 0)
     state = env.step(state, action)
 
+    assert state.terminated == False
     assert state.scene.turn_tracker.initiative == 3
     assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
         [0, 0, 0, 0],
         [0, 0, 1, 0]
     ]))
+
+    action = dnd5e.encode_action(Actions.END_TURN, 1, 2, 0, 0)
+    state = env.step(state, action)
+
+    assert state.terminated == False
+    assert state.scene.turn_tracker.initiative == 1
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [1, 1, 0, 0],
+        [0, 0, 0, 0]
+    ]))
+
+
+
+
+def test_vmap():
+
+    env = dnd5e.DND5E()
 
     # check vmap
     init, step = jax.vmap(env.init), jax.vmap(env.step)
@@ -93,6 +111,20 @@ def test_action_resource_table():
         actions_available[:, :, Actions.END_TURN] == jnp.array([
             [1, 1, 1, 1], [1, 1, 1, 1]
         ]))
+
+def test_legal_actions():
+
+    scene = dnd5e.init_scene(None)
+    legal_action_mask = dnd5e._legal_actions(scene)
+    legal_action_mask = legal_action_mask.ravel()
+
+    for character in range(MAX_PARTY_SIZE):
+        action = dnd5e.encode_action(Actions.END_TURN, Party.PC, character, 0, 0)
+        print(action, legal_action_mask[action])
+
+    print(legal_action_mask)
+
+
 
 
 def test_next_cohort():

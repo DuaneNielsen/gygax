@@ -29,24 +29,23 @@ def legal_actions_by_action_resource(action_resources):
 
     # end turn is always a legal action
     legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(TRUE)
-    return legal_actions
+    return legal_actions[..., jnp.newaxis, jnp.newaxis]
 
 
 def _legal_actions(scene):
     legal_actions = jnp.ones((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.bool)
-    legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)[
-        ..., jnp.newaxis, jnp.newaxis]
+    legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)
     legal_actions = legal_actions & scene.turn_tracker.characters_acting[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
     return legal_actions
 
 
 def encode_action(action, source_party, source_character, target_party, target_slot):
-    multi_index = [action, source_party, source_character, target_party, target_slot]
-    return jnp.ravel_multi_index(multi_index, [N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE, N_PLAYERS, MAX_PARTY_SIZE])
+    multi_index = [source_party, source_character, action, target_party, target_slot]
+    return jnp.ravel_multi_index(multi_index, [N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE])
 
 
 def decode_action(encoded_action):
-    return jnp.unravel_index(encoded_action, [N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE, N_PLAYERS, MAX_PARTY_SIZE])
+    return jnp.unravel_index(encoded_action, [N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE])
 
 
 @chex.dataclass
@@ -122,11 +121,13 @@ def init_scene(config=None):
     party = init_party()
     party_config = config[ConfigItems.PARTY]
     for p in constants.Party:
-        for i, (name, character_sheet) in enumerate(party_config[p].items()):
+        for c, (name, character_sheet) in enumerate(party_config[p].items()):
             for ability in Abilities:
                 ability_score = character_sheet[CharacterStats.ABILITIES][ability]
                 ability_modifier = (ability_score - 10) // 2
-                party.ability_modifier = party.ability_modifier.at[p.value, i, ability.value].set(ability_modifier)
+                party.ability_modifier = party.ability_modifier.at[p.value, c, ability.value].set(ability_modifier)
+
+            party.hitpoints = party.hitpoints.at[p.value, c].set(character_sheet[CharacterStats.HITPOINTS])
 
     dex_ability_bonus = party.ability_modifier[:, :, Abilities.DEX]
     return Scene(
@@ -189,7 +190,8 @@ def end_turn(state, action, source_party, source_character, target_party, target
 
 
 def _step(state: State, action: Array) -> State:
-    action, source_party, source_character, target_party, target_slot = decode_action(action)
+    source_party, source_character, action, target_party, target_slot = decode_action(action)
+    jax.debug.print('action {} source_party {} source_character {}', action, source_party, source_character)
 
     # actions that take effect on the turn start occur before this line
     state.scene.turn_tracker = turn_tracker.end_on_character_start(state.scene.turn_tracker)
