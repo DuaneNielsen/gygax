@@ -72,3 +72,4 @@ class Party(IntEnum):
 class CharacterStats(StrEnum):
     ABILITIES = auto()
     HITPOINTS = auto()
+    ARMORCLASS = auto()
