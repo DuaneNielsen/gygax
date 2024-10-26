@@ -18,6 +18,7 @@ class Armor:
 
 
 armor = {
+    'cloth': Armor(ac=10, max_dex_bonus=10, type=ArmorType.CLOTH, stealth_disadvantage=True),
     'padded': Armor(ac=11, max_dex_bonus=10, type=ArmorType.LIGHT, stealth_disadvantage=True),
     'leather': Armor(ac=11, max_dex_bonus=10, type=ArmorType.LIGHT, stealth_disadvantage=False),
     'studded-leather': Armor(ac=12, max_dex_bonus=10, type=ArmorType.LIGHT, stealth_disadvantage=False),

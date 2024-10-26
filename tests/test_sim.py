@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from constants import *
 import turn_tracker
 from constants import Abilities
+import equipment.weapons as weapons
 
 
 def test_sim():
@@ -16,6 +17,33 @@ def test_sim():
         [1, 1, 3, -1],
         [1, 1, 3, -1]
     ]))
+
+    assert jnp.all(state.scene.party.armor_class == jnp.array([
+        [18, 18, 14, 9],
+        [18, 18, 14, 9]
+    ]))
+
+    assert jnp.all(state.scene.party.weapons.legal_use_pos[0, 0, WeaponSlots.MELEE] == jnp.array([
+        [0, 0, 1, 1]
+    ]))
+    assert jnp.all(state.scene.party.weapons.legal_target_pos[0, 0, WeaponSlots.MELEE] == jnp.array([
+        [0, 0, 0, 0],
+        [0, 0, 1, 1]
+    ]))
+    assert state.scene.party.weapons.damage.amount[0, 0, WeaponSlots.MELEE] == 4.5
+    assert state.scene.party.weapons.damage.type[0, 0, WeaponSlots.MELEE] == weapons.DamageType.SLASHING
+
+
+    assert jnp.all(state.scene.party.weapons.legal_use_pos[0, 0, WeaponSlots.RANGED] == jnp.array([
+        [1, 1, 0, 0]
+    ]))
+    assert jnp.all(state.scene.party.weapons.legal_target_pos[0, 0, WeaponSlots.RANGED] == jnp.array([
+        [0, 0, 0, 0],
+        [1, 1, 1, 1]
+    ]))
+    assert state.scene.party.weapons.damage.amount[0, 0, WeaponSlots.RANGED] == 4.5
+    assert state.scene.party.weapons.damage.type[0, 0, WeaponSlots.RANGED] == weapons.DamageType.PIERCING
+
 
     action = dnd5e.encode_action(Actions.END_TURN, 0, 2, 0, 0)
     state = env.step(state, action)
@@ -78,7 +106,7 @@ def test_action_encode():
     target_party = jnp.array([1, 0])
     target_slot = jnp.array([1, 2])
     enc_action = dnd5e.encode_action(action, source_party, source_character, target_party, target_slot)
-    daction, dsource_party, dsource_character, dtarget_party, dtarget_slot = dnd5e.decode_action(enc_action)
+    dsource_party, dsource_character, daction, dtarget_party, dtarget_slot = dnd5e.decode_action(enc_action)
     assert jnp.all(action == daction)
     assert jnp.all(source_party == dsource_party)
     assert jnp.all(source_character == dsource_character)
@@ -87,6 +115,9 @@ def test_action_encode():
 
 
 def test_action_resource_table():
+
+
+
     action_resources_party1 = jnp.array([
         [1, 1, 1, 0],
         [0, 1, 0, 0],
@@ -105,7 +136,7 @@ def test_action_resource_table():
 
     actions_available = dnd5e.legal_actions_by_action_resource(action_resources)
 
-    assert actions_available.shape == (N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS)
+    assert actions_available.shape == (N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, 1, 1)
 
     assert jnp.all(
         actions_available[:, :, Actions.END_TURN] == jnp.array([

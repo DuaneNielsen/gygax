@@ -69,7 +69,10 @@ class Party(IntEnum):
     NPC = 1
 
 
-class CharacterStats(StrEnum):
+class CharacterSheet(StrEnum):
     ABILITIES = auto()
     HITPOINTS = auto()
-    ARMORCLASS = auto()
+    ARMOR = auto()
+    MELEE_WEAPON = auto()
+    SHIELD = auto()
+    RANGED_WEAPON = auto()

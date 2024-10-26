@@ -14,3 +14,8 @@ def parse_dice_notation(notation):
         modifier = int(match.group(4)) if match.group(3) == '+' else -int(match.group(4))
 
     return num_dice, num_sides, modifier
+
+
+def expected_roll(notation):
+    num_dice, num_sides, modifier = parse_dice_notation(notation)
+    return num_dice * (num_sides + 1) / 2 + modifier

@@ -7,6 +7,7 @@ import constants
 import turn_tracker
 import chex
 from pgx.core import Array
+import dice
 
 """
 This simulation is deterministic.
@@ -62,7 +63,7 @@ def init_damage():
 
 
 @chex.dataclass
-class WeaponSlots:
+class Weapons:
     legal_use_pos: chex.ArrayDevice
     legal_target_pos: chex.ArrayDevice
     magic_bonus: chex.ArrayDevice
@@ -70,8 +71,8 @@ class WeaponSlots:
 
 
 def init_weapon_slots():
-    return WeaponSlots(
-        legal_use_pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS, 1, MAX_PARTY_SIZE), dtype=jnp.bool),
+    return Weapons(
+        legal_use_pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS, MAX_PARTY_SIZE), dtype=jnp.bool),
         legal_target_pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS, N_PLAYERS, MAX_PARTY_SIZE),
                                    dtype=jnp.bool),
         magic_bonus=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS), dtype=jnp.bool),
@@ -115,21 +116,54 @@ class Scene:
 
 from default_config import default_config
 
+def ability_modifier(ability_score):
+    return (ability_score - 10) // 2
 
 def init_scene(config=None):
     config = config if config is not None else default_config
     party = init_party()
     party_config = config[ConfigItems.PARTY]
     for p in constants.Party:
-        for c, (name, character_sheet) in enumerate(party_config[p].items()):
-            for ability in Abilities:
-                ability_score = character_sheet[CharacterStats.ABILITIES][ability]
-                ability_modifier = (ability_score - 10) // 2
-                party.ability_modifier = party.ability_modifier.at[p.value, c, ability.value].set(ability_modifier)
+        for C, (name, character_sheet) in enumerate(party_config[p].items()):
+            P = p.value
 
-            party.hitpoints = party.hitpoints.at[p.value, c].set(character_sheet[CharacterStats.HITPOINTS])
+            # ability scores
+            for ability in Abilities:
+                ability_score = character_sheet[CharacterSheet.ABILITIES][ability]
+                party.ability_modifier = party.ability_modifier.at[P, C, ability.value].set(ability_modifier(ability_score))
+
+            party.hitpoints = party.hitpoints.at[P, C].set(character_sheet[CharacterSheet.HITPOINTS])
+
+            # armor class
+            dex_ability_modifier = ability_modifier(character_sheet[CharacterSheet.ABILITIES][Abilities.DEX])
+            ac_dex_bonus = min(character_sheet[CharacterSheet.ARMOR].max_dex_bonus, dex_ability_modifier)
+            armour_class = character_sheet[CharacterSheet.ARMOR].ac + ac_dex_bonus + character_sheet[CharacterSheet.SHIELD] * 2
+            party.armor_class = party.armor_class.at[P, C].set(armour_class)
+
+            # melee weapon slots
+            melee_use = jnp.array([0, 0, 1, 1])
+            melee_target = jnp.array([[0, 0, 0, 0], [0, 0, 1, 1]])
+            party.weapons.legal_use_pos = party.weapons.legal_use_pos.at[P, C, WeaponSlots.MELEE].set(melee_use)
+            party.weapons.legal_target_pos = party.weapons.legal_target_pos.at[P, C, WeaponSlots.MELEE].set(melee_target)
+            damage_type = character_sheet[CharacterSheet.MELEE_WEAPON].damage_type.value
+            damage = dice.expected_roll(character_sheet[CharacterSheet.MELEE_WEAPON].damage)
+            party.weapons.damage.amount = party.weapons.damage.amount.at[P, C, WeaponSlots.MELEE].set(damage)
+            party.weapons.damage.type = party.weapons.damage.type.at[P, C, WeaponSlots.MELEE].set(damage_type)
+
+            # ranged weapon slots
+            range_use = jnp.array([1, 1, 0, 0])
+            range_target = jnp.array([[0, 0, 0, 0], [1, 1, 1, 1]])
+            party.weapons.legal_use_pos = party.weapons.legal_use_pos.at[P, C, WeaponSlots.RANGED].set(range_use)
+            party.weapons.legal_target_pos = party.weapons.legal_target_pos.at[P, C, WeaponSlots.RANGED].set(range_target)
+            damage_type = character_sheet[CharacterSheet.RANGED_WEAPON].damage_type.value
+            damage = dice.expected_roll(character_sheet[CharacterSheet.RANGED_WEAPON].damage)
+            party.weapons.damage.amount = party.weapons.damage.amount.at[P, C, WeaponSlots.RANGED].set(damage)
+            party.weapons.damage.type = party.weapons.damage.type.at[P, C, WeaponSlots.RANGED].set(damage_type)
+
 
     dex_ability_bonus = party.ability_modifier[:, :, Abilities.DEX]
+
+
     return Scene(
         party=party,
         turn_tracker=turn_tracker.init(dex_ability_bonus=dex_ability_bonus)
@@ -189,6 +223,13 @@ def end_turn(state, action, source_party, source_character, target_party, target
     return state
 
 
+def weapon_attack(state, action, source_party, source_character, target_party, target_slot):
+    # f = lambda new, old: jnp.where(action == Actions.END_TURN, new_state, state)
+    # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
+    return state
+
+
+
 def _step(state: State, action: Array) -> State:
     source_party, source_character, action, target_party, target_slot = decode_action(action)
     jax.debug.print('action {} source_party {} source_character {}', action, source_party, source_character)
@@ -197,6 +238,7 @@ def _step(state: State, action: Array) -> State:
     state.scene.turn_tracker = turn_tracker.end_on_character_start(state.scene.turn_tracker)
 
     state = end_turn(state, action, source_party, source_character, target_party, target_slot)
+    state = weapon_attack(state, action, source_party, source_character, target_party, target_slot)
 
     game_over, winner = _win_check(state)
 
