@@ -66,7 +66,14 @@ def test_sim():
 
 
 def test_legal_actions_by_player_position():
-    party = dnd5e.init_party()
+    pos = jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32)
+    pos = pos.at[0, 0].set(1)
+    legal_pos = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_CHARACTERS), dtype=jnp.bool)
+    legal_pos = legal_pos.at[0, 0, 1].set(jnp.array([0, 1, 0, 0]))
+    legal_actions = dnd5e.legal_actions_by_player_position(pos, legal_pos)
+
+    assert legal_actions[0, 0, 0] == False
+    assert legal_actions[0, 0, 1] == True
 
 
 def test_vmap():
