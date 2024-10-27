@@ -2,6 +2,7 @@ import constants
 from constants import *
 from equipment.armor import armor
 from equipment.weapons import weapons
+from equipment.equipment import empty
 
 
 fighter = {
@@ -15,8 +16,8 @@ fighter = {
     },
     CharacterSheet.HITPOINTS: 13,
     CharacterSheet.ARMOR: armor['chain-mail'],
-    CharacterSheet.SHIELD: True,
-    CharacterSheet.MELEE_WEAPON: weapons['longsword'],
+    CharacterSheet.MAIN_HAND: weapons['longsword'],
+    CharacterSheet.OFF_HAND: armor['shield'],
     CharacterSheet.RANGED_WEAPON: weapons['crossbow-light']
 }
 
@@ -31,8 +32,8 @@ cleric = {
     },
     CharacterSheet.HITPOINTS: 11,
     CharacterSheet.ARMOR: armor['chain-mail'],
-    CharacterSheet.SHIELD: True,
-    CharacterSheet.MELEE_WEAPON: weapons['mace'],
+    CharacterSheet.OFF_HAND: armor['shield'],
+    CharacterSheet.MAIN_HAND: weapons['mace'],
     CharacterSheet.RANGED_WEAPON: weapons['crossbow-light']
 }
 
@@ -47,8 +48,8 @@ rogue = {
     },
     CharacterSheet.HITPOINTS: 8,
     CharacterSheet.ARMOR: armor['leather'],
-    CharacterSheet.SHIELD: False,
-    CharacterSheet.MELEE_WEAPON: weapons['rapier'],
+    CharacterSheet.OFF_HAND: empty,
+    CharacterSheet.MAIN_HAND: weapons['rapier'],
     CharacterSheet.RANGED_WEAPON: weapons['shortbow']
 }
 
@@ -63,8 +64,8 @@ wizard = {
     },
     CharacterSheet.HITPOINTS: 6,
     CharacterSheet.ARMOR: armor['cloth'],
-    CharacterSheet.SHIELD: False,
-    CharacterSheet.MELEE_WEAPON: weapons['rapier'],
+    CharacterSheet.OFF_HAND: empty,
+    CharacterSheet.MAIN_HAND: weapons['rapier'],
     CharacterSheet.RANGED_WEAPON: weapons['shortbow']
 }
 

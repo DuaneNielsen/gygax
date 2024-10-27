@@ -2,12 +2,18 @@ import jax
 import jax.numpy as jnp
 
 import pgx.core as core
+
+import equipment.equipment
 from constants import *
 import constants
 import turn_tracker
 import chex
 from pgx.core import Array
 import dice
+from enum import IntEnum, auto
+from equipment.equipment import Equipment, EquipmentType
+import equipment.armor as armor
+import equipment.weapons as weapons
 
 """
 This simulation is deterministic.
@@ -26,59 +32,91 @@ which would significantly complicate things
 
 
 def legal_actions_by_action_resource(action_resources):
-    legal_actions = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS), dtype=jnp.bool)
-
-    # end turn is always a legal action
-    legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(TRUE)
+    legal_actions = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.bool)
+    # weapons require an action or an attack resource
+    actions = action_resources[:, :, ActionResourceType.ACTION] > 0
+    attacks = action_resources[:, :, ActionResourceType.ATTACK] > 0
+    legal_actions = legal_actions.at[:, :, Actions.ATTACK_MELEE_WEAPON].set(actions | attacks)
+    legal_actions = legal_actions.at[:, :, Actions.ATTACK_RANGED_WEAPON].set(actions | attacks)
     return legal_actions[..., jnp.newaxis, jnp.newaxis]
 
 
+def legal_actions_by_player_position(pos, legal_use_pos):
+    """
+    True if character is in position to perform action
+    :param pos: (Party, Characters)
+    :param legal_use_pos: (Party, Characters, Action, Position)
+    :return: boolean (Party, Characters, Action, 1, 1)
+    """
+    R_PLAYER = jnp.arange(N_PLAYERS)[:, None, None]
+    R_PARTY = jnp.arange(N_CHARACTERS)[None, :, None]
+    R_ACTION_SLOTS = jnp.arange(N_ACTIONS)[None, None, :]
+    POS = pos[..., None]
+    legal_pos_for_action = legal_use_pos[R_PLAYER, R_PARTY, R_ACTION_SLOTS, POS]
+    return legal_pos_for_action[..., jnp.newaxis, jnp.newaxis]
+
+
 def _legal_actions(scene):
-    legal_actions = jnp.ones((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.bool)
+    legal_actions = jnp.ones((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS), dtype=jnp.bool)
     legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)
     legal_actions = legal_actions & scene.turn_tracker.characters_acting[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
+    legal_actions = legal_actions & legal_actions_by_player_position(scene.party.pos, scene.party.actions.legal_use_pos)
+
+    # end turn is always a legal action
+    legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(TRUE)
     return legal_actions
 
 
 def encode_action(action, source_party, source_character, target_party, target_slot):
     multi_index = [source_party, source_character, action, target_party, target_slot]
-    return jnp.ravel_multi_index(multi_index, [N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE])
+    return jnp.ravel_multi_index(multi_index, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
 
 
 def decode_action(encoded_action):
-    return jnp.unravel_index(encoded_action, [N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, N_PLAYERS, MAX_PARTY_SIZE])
+    return jnp.unravel_index(encoded_action, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
 
 
 @chex.dataclass
-class Damage:
-    amount: chex.ArrayDevice  # expected damage
-    type: chex.ArrayDevice  # damage type
-
-
-def init_damage():
-    return Damage(
-        amount=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS), dtype=jnp.float32),
-        type=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS), dtype=jnp.int32)
-    )
-
-
-@chex.dataclass
-class Weapons:
+class ActionArray:
+    type: chex.ArrayDevice
+    damage: chex.ArrayDevice
+    damage_type: chex.ArrayDevice
     legal_use_pos: chex.ArrayDevice
     legal_target_pos: chex.ArrayDevice
-    magic_bonus: chex.ArrayDevice
-    damage: Damage
+    resource_requirement: chex.ArrayDevice
 
 
-def init_weapon_slots():
-    return Weapons(
-        legal_use_pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS, MAX_PARTY_SIZE), dtype=jnp.bool),
-        legal_target_pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS, N_PLAYERS, MAX_PARTY_SIZE),
-                                   dtype=jnp.bool),
-        magic_bonus=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_WEAPON_SLOTS), dtype=jnp.bool),
-        damage=init_damage()
+def init_actions():
+    return ActionArray(
+        type=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.int32),
+        damage=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.float32),
+        damage_type=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.int32),
+        legal_use_pos=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_CHARACTERS), dtype=jnp.bool),
+        legal_target_pos=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS), dtype=jnp.bool),
+        resource_requirement=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.int32),
     )
 
+
+def convert_equipment(item: Equipment):
+    if isinstance(item, weapons.Weapon):
+        if item.type == EquipmentType.WEAPON_MELEE:
+            return ActionArray(
+                type=jnp.array(item.type, dtype=jnp.int32),
+                damage=jnp.array(dice.expected_roll(item.damage), dtype=jnp.float32),
+                damage_type=jnp.array(item.damage_type, dtype=jnp.int32),
+                legal_use_pos=jnp.array([0, 0, 1, 1], dtype=jnp.bool),
+                legal_target_pos=jnp.array([[0, 0, 0, 0], [0, 0, 1, 1]], dtype=jnp.bool),
+                resource_requirement=jnp.array(ActionResourceType.ATTACK, dtype=jnp.int32),
+            )
+        if item.type == EquipmentType.WEAPON_RANGED:
+            return ActionArray(
+                type=jnp.array(item.type, dtype=jnp.int32),
+                damage=jnp.array(dice.expected_roll(item.damage), dtype=jnp.float32),
+                damage_type=jnp.array(item.damage_type, dtype=jnp.int32),
+                legal_use_pos=jnp.array([1, 1, 0, 0], dtype=jnp.bool),
+                legal_target_pos=jnp.array([[0, 0, 0, 0], [1, 1, 1, 1]], dtype=jnp.bool),
+                resource_requirement=jnp.array(ActionResourceType.ATTACK, dtype=jnp.int32),
+            )
 
 @chex.dataclass
 class Party:
@@ -88,22 +126,22 @@ class Party:
     proficiency_bonus: chex.ArrayDevice  # proficiency bonus
     ability_modifier: chex.ArrayDevice  # ability bonus for each stat
     class_ability_bonus_idx: chex.ArrayDevice  # class ability index 0: STR, 1: DEX, 2: CON,
-    weapons: WeaponSlots
-    actions_resources_start_turn: chex.ArrayDevice  # number of actions at the start of the turn
+    actions: ActionArray  # the characters equipment
+    action_resources_start_turn: chex.ArrayDevice
     action_resources: chex.ArrayDevice  # number of actions remaining
 
 
 def init_party():
     return Party(
-        pos=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
-        hitpoints=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.float32),
-        armor_class=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
-        proficiency_bonus=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),  # proficiency bonus
-        ability_modifier=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ABILITIES), dtype=jnp.int32),
-        class_ability_bonus_idx=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE), dtype=jnp.int32),
-        weapons=init_weapon_slots(),
-        actions_resources_start_turn=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32),
-        action_resources=jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32)
+        pos=jnp.arange(N_CHARACTERS).repeat(N_PLAYERS).reshape(N_CHARACTERS, N_PLAYERS).T,
+        hitpoints=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.float32),
+        armor_class=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32),
+        proficiency_bonus=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32),  # proficiency bonus
+        ability_modifier=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ABILITIES), dtype=jnp.int32),
+        class_ability_bonus_idx=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32),
+        actions=init_actions(),
+        action_resources_start_turn=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32),
+        action_resources=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32)
     )
 
 
@@ -113,11 +151,12 @@ class Scene:
     turn_tracker: turn_tracker.TurnTracker
 
 
-
 from default_config import default_config
+
 
 def ability_modifier(ability_score):
     return (ability_score - 10) // 2
+
 
 def init_scene(config=None):
     config = config if config is not None else default_config
@@ -130,39 +169,27 @@ def init_scene(config=None):
             # ability scores
             for ability in Abilities:
                 ability_score = character_sheet[CharacterSheet.ABILITIES][ability]
-                party.ability_modifier = party.ability_modifier.at[P, C, ability.value].set(ability_modifier(ability_score))
+                party.ability_modifier = party.ability_modifier.at[P, C, ability.value].set(
+                    ability_modifier(ability_score))
 
             party.hitpoints = party.hitpoints.at[P, C].set(character_sheet[CharacterSheet.HITPOINTS])
 
             # armor class
             dex_ability_modifier = ability_modifier(character_sheet[CharacterSheet.ABILITIES][Abilities.DEX])
             ac_dex_bonus = min(character_sheet[CharacterSheet.ARMOR].max_dex_bonus, dex_ability_modifier)
-            armour_class = character_sheet[CharacterSheet.ARMOR].ac + ac_dex_bonus + character_sheet[CharacterSheet.SHIELD] * 2
+            has_shield = character_sheet[CharacterSheet.OFF_HAND].type == armor.ArmorType.SHIELD
+            armour_class = character_sheet[CharacterSheet.ARMOR].ac + ac_dex_bonus + has_shield * 2
             party.armor_class = party.armor_class.at[P, C].set(armour_class)
 
-            # melee weapon slots
-            melee_use = jnp.array([0, 0, 1, 1])
-            melee_target = jnp.array([[0, 0, 0, 0], [0, 0, 1, 1]])
-            party.weapons.legal_use_pos = party.weapons.legal_use_pos.at[P, C, WeaponSlots.MELEE].set(melee_use)
-            party.weapons.legal_target_pos = party.weapons.legal_target_pos.at[P, C, WeaponSlots.MELEE].set(melee_target)
-            damage_type = character_sheet[CharacterSheet.MELEE_WEAPON].damage_type.value
-            damage = dice.expected_roll(character_sheet[CharacterSheet.MELEE_WEAPON].damage)
-            party.weapons.damage.amount = party.weapons.damage.amount.at[P, C, WeaponSlots.MELEE].set(damage)
-            party.weapons.damage.type = party.weapons.damage.type.at[P, C, WeaponSlots.MELEE].set(damage_type)
+            # # melee weapon
+            item = convert_equipment(character_sheet[CharacterSheet.MAIN_HAND])
+            party.actions = jax.tree.map(lambda x, y : x.at[P, C, Actions.ATTACK_MELEE_WEAPON].set(y), party.actions, item)
 
-            # ranged weapon slots
-            range_use = jnp.array([1, 1, 0, 0])
-            range_target = jnp.array([[0, 0, 0, 0], [1, 1, 1, 1]])
-            party.weapons.legal_use_pos = party.weapons.legal_use_pos.at[P, C, WeaponSlots.RANGED].set(range_use)
-            party.weapons.legal_target_pos = party.weapons.legal_target_pos.at[P, C, WeaponSlots.RANGED].set(range_target)
-            damage_type = character_sheet[CharacterSheet.RANGED_WEAPON].damage_type.value
-            damage = dice.expected_roll(character_sheet[CharacterSheet.RANGED_WEAPON].damage)
-            party.weapons.damage.amount = party.weapons.damage.amount.at[P, C, WeaponSlots.RANGED].set(damage)
-            party.weapons.damage.type = party.weapons.damage.type.at[P, C, WeaponSlots.RANGED].set(damage_type)
-
+            # ranged weapon
+            item = convert_equipment(character_sheet[CharacterSheet.RANGED_WEAPON])
+            party.actions = jax.tree.map(lambda x, y : x.at[P, C, Actions.ATTACK_RANGED_WEAPON].set(y), party.actions, item)
 
     dex_ability_bonus = party.ability_modifier[:, :, Abilities.DEX]
-
 
     return Scene(
         party=party,
@@ -177,12 +204,12 @@ from pgx._src.struct import dataclass
 class State:
     # dnd5e specific
     scene: Scene
-    legal_action_mask: Array = jnp.zeros((N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS))
+    legal_action_mask: Array = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS))
     observation: Array = jnp.zeros((3, 3, 2), dtype=jnp.bool_)
     rewards: Array = jnp.float32([0.0, 0.0])
     terminated: Array = FALSE
     truncated: Array = FALSE
-    _step_count: Array = jnp.zeros((1, ), dtype=jnp.int32)
+    _step_count: Array = jnp.zeros((1,), dtype=jnp.int32)
 
     @property
     def current_player(self):
@@ -227,7 +254,6 @@ def weapon_attack(state, action, source_party, source_character, target_party, t
     # f = lambda new, old: jnp.where(action == Actions.END_TURN, new_state, state)
     # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
     return state
-
 
 
 def _step(state: State, action: Array) -> State:

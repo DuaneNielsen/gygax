@@ -7,6 +7,7 @@ class ArmorType(StrEnum):
     LIGHT = auto()
     MEDIUM = auto()
     HEAVY = auto()
+    SHIELD = auto()
 
 
 @dataclass
@@ -31,4 +32,5 @@ armor = {
     'chain-mail': Armor(ac=16, max_dex_bonus=0, type=ArmorType.HEAVY, stealth_disadvantage=True),
     'splint': Armor(ac=17, max_dex_bonus=0, type=ArmorType.HEAVY, stealth_disadvantage=True),
     'plate': Armor(ac=18, max_dex_bonus=0, type=ArmorType.HEAVY, stealth_disadvantage=True),
+    'shield': Armor(ac=2, max_dex_bonus=10, type=ArmorType.SHIELD, stealth_disadvantage=False)
 }

@@ -1,7 +1,7 @@
 import chex
 import jax.numpy as jnp
 from jax import Array
-from constants import N_PLAYERS, MAX_PARTY_SIZE
+from constants import N_PLAYERS, N_CHARACTERS
 
 """
 the scheme for controlling the flow of initiative is
@@ -76,7 +76,7 @@ def init(dex_ability_bonus):
 def _next_cohort(turn_tracker, actions_remain: Array):
     # if more than 1 character has the same initiative, we must skip over them
     n_simultaneous_characters = jnp.sum(turn_tracker.initiative_scores[turn_tracker.party] == turn_tracker.initiative)
-    next_cohort = (turn_tracker.cohort[turn_tracker.party] + n_simultaneous_characters) % MAX_PARTY_SIZE
+    next_cohort = (turn_tracker.cohort[turn_tracker.party] + n_simultaneous_characters) % N_CHARACTERS
     turn = jnp.where(next_cohort == 0, turn_tracker.turn[turn_tracker.party] + 1, turn_tracker.turn[turn_tracker.party])
 
     # only advance the current party

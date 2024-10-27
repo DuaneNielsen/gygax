@@ -1,3 +1,4 @@
+import constants
 import dnd5e
 from pgx.experimental import act_randomly
 import jax
@@ -23,26 +24,24 @@ def test_sim():
         [18, 18, 14, 9]
     ]))
 
-    assert jnp.all(state.scene.party.weapons.legal_use_pos[0, 0, WeaponSlots.MELEE] == jnp.array([
+    assert jnp.all(state.scene.party.actions.legal_use_pos[0, 0, Actions.ATTACK_MELEE_WEAPON] == jnp.array([
         [0, 0, 1, 1]
     ]))
-    assert jnp.all(state.scene.party.weapons.legal_target_pos[0, 0, WeaponSlots.MELEE] == jnp.array([
+    assert jnp.all(state.scene.party.actions.legal_target_pos[0, 0, Actions.ATTACK_MELEE_WEAPON] == jnp.array([
         [0, 0, 0, 0],
         [0, 0, 1, 1]
     ]))
-    assert state.scene.party.weapons.damage.amount[0, 0, WeaponSlots.MELEE] == 4.5
-    assert state.scene.party.weapons.damage.type[0, 0, WeaponSlots.MELEE] == weapons.DamageType.SLASHING
+    assert state.scene.party.actions.damage[0, 0, Actions.ATTACK_MELEE_WEAPON] == 4.5
+    assert state.scene.party.actions.damage_type[0, 0, Actions.ATTACK_MELEE_WEAPON] == constants.DamageType.SLASHING
 
 
-    assert jnp.all(state.scene.party.weapons.legal_use_pos[0, 0, WeaponSlots.RANGED] == jnp.array([
-        [1, 1, 0, 0]
-    ]))
-    assert jnp.all(state.scene.party.weapons.legal_target_pos[0, 0, WeaponSlots.RANGED] == jnp.array([
+    assert jnp.all(state.scene.party.actions.legal_use_pos[0, 0, Actions.ATTACK_RANGED_WEAPON] == jnp.array([1, 1, 0, 0]))
+    assert jnp.all(state.scene.party.actions.legal_target_pos[0, 0, Actions.ATTACK_RANGED_WEAPON] == jnp.array([
         [0, 0, 0, 0],
         [1, 1, 1, 1]
     ]))
-    assert state.scene.party.weapons.damage.amount[0, 0, WeaponSlots.RANGED] == 4.5
-    assert state.scene.party.weapons.damage.type[0, 0, WeaponSlots.RANGED] == weapons.DamageType.PIERCING
+    assert state.scene.party.actions.damage[0, 0, Actions.ATTACK_RANGED_WEAPON] == 4.5
+    assert state.scene.party.actions.damage_type[0, 0, Actions.ATTACK_RANGED_WEAPON] == constants.DamageType.PIERCING
 
 
     action = dnd5e.encode_action(Actions.END_TURN, 0, 2, 0, 0)
@@ -66,6 +65,8 @@ def test_sim():
     ]))
 
 
+def test_legal_actions_by_player_position():
+    party = dnd5e.init_party()
 
 
 def test_vmap():
@@ -113,43 +114,13 @@ def test_action_encode():
     assert jnp.all(target_party == dtarget_party)
     assert jnp.all(target_slot == dtarget_slot)
 
-
-def test_action_resource_table():
-
-
-
-    action_resources_party1 = jnp.array([
-        [1, 1, 1, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 0],
-    ])
-
-    action_resources_party2 = jnp.array([
-        [1, 1, 1, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 0],
-    ])
-
-    action_resources = jnp.stack([action_resources_party1, action_resources_party2])
-
-    actions_available = dnd5e.legal_actions_by_action_resource(action_resources)
-
-    assert actions_available.shape == (N_PLAYERS, MAX_PARTY_SIZE, N_ACTIONS, 1, 1)
-
-    assert jnp.all(
-        actions_available[:, :, Actions.END_TURN] == jnp.array([
-            [1, 1, 1, 1], [1, 1, 1, 1]
-        ]))
-
 def test_legal_actions():
 
     scene = dnd5e.init_scene(None)
     legal_action_mask = dnd5e._legal_actions(scene)
     legal_action_mask = legal_action_mask.ravel()
 
-    for character in range(MAX_PARTY_SIZE):
+    for character in range(N_CHARACTERS):
         action = dnd5e.encode_action(Actions.END_TURN, Party.PC, character, 0, 0)
         print(action, legal_action_mask[action])
 
