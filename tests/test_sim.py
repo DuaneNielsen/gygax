@@ -34,8 +34,8 @@ def test_sim():
     assert state.scene.party.actions.damage[0, 0, Actions.ATTACK_MELEE_WEAPON] == 4.5
     assert state.scene.party.actions.damage_type[0, 0, Actions.ATTACK_MELEE_WEAPON] == constants.DamageType.SLASHING
 
-
-    assert jnp.all(state.scene.party.actions.legal_use_pos[0, 0, Actions.ATTACK_RANGED_WEAPON] == jnp.array([1, 1, 0, 0]))
+    assert jnp.all(
+        state.scene.party.actions.legal_use_pos[0, 0, Actions.ATTACK_RANGED_WEAPON] == jnp.array([1, 1, 0, 0]))
     assert jnp.all(state.scene.party.actions.legal_target_pos[0, 0, Actions.ATTACK_RANGED_WEAPON] == jnp.array([
         [0, 0, 0, 0],
         [1, 1, 1, 1]
@@ -43,6 +43,7 @@ def test_sim():
     assert state.scene.party.actions.damage[0, 0, Actions.ATTACK_RANGED_WEAPON] == 4.5
     assert state.scene.party.actions.damage_type[0, 0, Actions.ATTACK_RANGED_WEAPON] == constants.DamageType.PIERCING
 
+    # take the first step here
 
     action = dnd5e.encode_action(Actions.END_TURN, 0, 2, 0, 0)
     state = env.step(state, action)
@@ -76,8 +77,62 @@ def test_legal_actions_by_player_position():
     assert legal_actions[0, 0, 1] == True
 
 
-def test_vmap():
+def test_legal_actions_by_target_position():
+    legal_pos = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS), dtype=jnp.bool)
+    legal_pos = legal_pos.at[0, 0, 1].set(jnp.array([[0, 0, 0, 0], [0, 0, 1, 1]]))
 
+    assert legal_pos[0, 0, 0, 0, 0] == False
+    assert legal_pos[0, 0, 1, 1, 1] == False
+    assert legal_pos[0, 0, 1, 1, 2] == True
+    assert legal_pos[0, 0, 1, 1, 3] == True
+
+    env = dnd5e.DND5E()
+    rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
+    state = env.init(rng_init)
+
+    legal_pos = state.scene.party.actions.legal_target_pos
+
+    assert legal_pos[0, 0, 0, 0, 0] == False
+    assert legal_pos[0, 0, Actions.ATTACK_MELEE_WEAPON, 0, 0] == False
+    assert legal_pos[0, 0, Actions.ATTACK_MELEE_WEAPON, 1, 1] == False
+    assert legal_pos[0, 0, Actions.ATTACK_MELEE_WEAPON, 1, 2] == True
+    assert legal_pos[0, 0, Actions.ATTACK_MELEE_WEAPON, 1, 3] == True
+
+    assert legal_pos[0, 0, Actions.ATTACK_RANGED_WEAPON, 0, 0] == False
+    assert legal_pos[0, 0, Actions.ATTACK_RANGED_WEAPON, 1, 1] == True
+    assert legal_pos[0, 0, Actions.ATTACK_RANGED_WEAPON, 1, 2] == True
+    assert legal_pos[0, 0, Actions.ATTACK_RANGED_WEAPON, 1, 3] == True
+
+
+def test_legal_actions():
+    env = dnd5e.DND5E()
+    rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
+    state = env.init(rng_init)
+
+    legal_actions = dnd5e._legal_actions(state.scene)
+
+    assert legal_actions[0, 2, Actions.ATTACK_MELEE_WEAPON, 0, 0] == False
+    assert legal_actions[0, 2, Actions.ATTACK_MELEE_WEAPON, 1, 1] == False
+    assert legal_actions[0, 2, Actions.ATTACK_MELEE_WEAPON, 1, 2] == True
+    assert legal_actions[0, 2, Actions.ATTACK_MELEE_WEAPON, 1, 3] == True
+
+    assert legal_actions[0, 2, Actions.ATTACK_RANGED_WEAPON, 0, 0] == False
+    assert legal_actions[0, 2, Actions.ATTACK_RANGED_WEAPON, 1, 1] == False
+    assert legal_actions[0, 2, Actions.ATTACK_RANGED_WEAPON, 1, 2] == False
+    assert legal_actions[0, 2, Actions.ATTACK_RANGED_WEAPON, 1, 3] == False
+
+    assert legal_actions[0, 0, Actions.ATTACK_MELEE_WEAPON, 0, 0] == False
+    assert legal_actions[0, 0, Actions.ATTACK_MELEE_WEAPON, 1, 1] == False
+    assert legal_actions[0, 0, Actions.ATTACK_MELEE_WEAPON, 1, 2] == False
+    assert legal_actions[0, 0, Actions.ATTACK_MELEE_WEAPON, 1, 3] == False
+
+    assert legal_actions[0, 0, Actions.ATTACK_RANGED_WEAPON, 0, 0] == False
+    assert legal_actions[0, 0, Actions.ATTACK_RANGED_WEAPON, 1, 1] == False
+    assert legal_actions[0, 0, Actions.ATTACK_RANGED_WEAPON, 1, 2] == False
+    assert legal_actions[0, 0, Actions.ATTACK_RANGED_WEAPON, 1, 3] == False
+
+
+def test_vmap():
     env = dnd5e.DND5E()
 
     # check vmap
@@ -101,7 +156,6 @@ def test_vmap():
         [0, 0, 1, 0]
     ]))
 
-
     # while ~jnp.all(state.terminated):
     #     state = env.step(state, act_randomly(rng, state.legal_action_mask))
     #     jax.debug.print('{}', state._board)
@@ -121,8 +175,8 @@ def test_action_encode():
     assert jnp.all(target_party == dtarget_party)
     assert jnp.all(target_slot == dtarget_slot)
 
-def test_legal_actions():
 
+def test_legal_actions():
     scene = dnd5e.init_scene(None)
     legal_action_mask = dnd5e._legal_actions(scene)
     legal_action_mask = legal_action_mask.ravel()
@@ -132,8 +186,6 @@ def test_legal_actions():
         print(action, legal_action_mask[action])
 
     print(legal_action_mask)
-
-
 
 
 def test_next_cohort():

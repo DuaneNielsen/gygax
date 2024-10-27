@@ -51,7 +51,7 @@ def legal_actions_by_player_position(pos, legal_use_pos):
     R_PLAYER = jnp.arange(N_PLAYERS)[:, None, None]
     R_PARTY = jnp.arange(N_CHARACTERS)[None, :, None]
     R_ACTION_SLOTS = jnp.arange(N_ACTIONS)[None, None, :]
-    POS = pos[..., None]
+    POS = pos[:, :, None]
     legal_pos_for_action = legal_use_pos[R_PLAYER, R_PARTY, R_ACTION_SLOTS, POS]
     return legal_pos_for_action[..., jnp.newaxis, jnp.newaxis]
 
@@ -61,6 +61,7 @@ def _legal_actions(scene):
     legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)
     legal_actions = legal_actions & scene.turn_tracker.characters_acting[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
     legal_actions = legal_actions & legal_actions_by_player_position(scene.party.pos, scene.party.actions.legal_use_pos)
+    legal_actions = legal_actions & scene.party.actions.legal_target_pos
 
     # end turn is always a legal action
     legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(TRUE)
@@ -173,6 +174,10 @@ def init_scene(config=None):
                     ability_modifier(ability_score))
 
             party.hitpoints = party.hitpoints.at[P, C].set(character_sheet[CharacterSheet.HITPOINTS])
+
+            # action resources
+            party.action_resources_start_turn = party.action_resources_start_turn.at[P, C, ActionResourceType.ACTION].set(1)
+            party.action_resources_start_turn = party.action_resources_start_turn.at[P, C, ActionResourceType.BONUS_ACTION].set(1)
 
             # armor class
             dex_ability_modifier = ability_modifier(character_sheet[CharacterSheet.ABILITIES][Abilities.DEX])
