@@ -168,12 +168,12 @@ def test_action_encode():
     target_party = jnp.array([1, 0])
     target_slot = jnp.array([1, 2])
     enc_action = dnd5e.encode_action(action, source_party, source_character, target_party, target_slot)
-    dsource_party, dsource_character, daction, dtarget_party, dtarget_slot = dnd5e.decode_action(enc_action)
-    assert jnp.all(action == daction)
-    assert jnp.all(source_party == dsource_party)
-    assert jnp.all(source_character == dsource_character)
-    assert jnp.all(target_party == dtarget_party)
-    assert jnp.all(target_slot == dtarget_slot)
+    dec_action = dnd5e.decode_action(enc_action)
+    assert jnp.all(action == dec_action.action)
+    assert jnp.all(source_party == dec_action.source_party)
+    assert jnp.all(source_character == dec_action.source_character)
+    assert jnp.all(target_party == dec_action.target_party)
+    assert jnp.all(target_slot == dec_action.target_slot)
 
 
 def test_legal_actions():

@@ -14,6 +14,7 @@ from enum import IntEnum, auto
 from equipment.equipment import Equipment, EquipmentType
 import equipment.armor as armor
 import equipment.weapons as weapons
+from collections import namedtuple
 
 """
 This simulation is deterministic.
@@ -30,6 +31,8 @@ It also allows us to use alphazero without needing to add "chance nodes" for sto
 which would significantly complicate things 
 """
 
+
+ActionTuple = namedtuple('ActionTuple', ['source_party', 'source_character', 'action', 'target_party', 'target_slot'])
 
 def legal_actions_by_action_resource(action_resources):
     legal_actions = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.bool)
@@ -68,13 +71,20 @@ def _legal_actions(scene):
     return legal_actions
 
 
+
+# @chex.dataclass
+# class ActionArray:
+#     action: jax.ArrayDevice
+#     source_party: chex.ArrayDevice
+#     source_character: chex.ArrayDevice
+
 def encode_action(action, source_party, source_character, target_party, target_slot):
     multi_index = [source_party, source_character, action, target_party, target_slot]
     return jnp.ravel_multi_index(multi_index, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
 
 
 def decode_action(encoded_action):
-    return jnp.unravel_index(encoded_action, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
+    return ActionTuple(*jnp.unravel_index(encoded_action, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS]))
 
 
 @chex.dataclass
@@ -248,28 +258,29 @@ def _win_check(state):
     return jnp.any(party_killed), ~jnp.argmax(party_killed)
 
 
-def end_turn(state, action, source_party, source_character, target_party, target_slot):
-    new_tt = turn_tracker.next_turn(state.scene.turn_tracker, source_party, source_character)
-    f = lambda new, old: jnp.where(action == Actions.END_TURN, new, old)
+def end_turn(state, action):
+    new_tt = turn_tracker.next_turn(state.scene.turn_tracker, action.source_party, action.source_character)
+    f = lambda new, old: jnp.where(action.action == Actions.END_TURN, new, old)
     state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
     return state
 
 
-def weapon_attack(state, action, source_party, source_character, target_party, target_slot):
+def weapon_attack(state, action):
+
     # f = lambda new, old: jnp.where(action == Actions.END_TURN, new_state, state)
     # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
     return state
 
 
 def _step(state: State, action: Array) -> State:
-    source_party, source_character, action, target_party, target_slot = decode_action(action)
-    jax.debug.print('action {} source_party {} source_character {}', action, source_party, source_character)
+    action = decode_action(action)
+    jax.debug.print('action {} source_party {} source_character {}', action.action, action.source_party, action.source_character)
 
     # actions that take effect on the turn start occur before this line
     state.scene.turn_tracker = turn_tracker.end_on_character_start(state.scene.turn_tracker)
 
-    state = end_turn(state, action, source_party, source_character, target_party, target_slot)
-    state = weapon_attack(state, action, source_party, source_character, target_party, target_slot)
+    state = end_turn(state, action)
+    state = weapon_attack(state, action)
 
     game_over, winner = _win_check(state)
 
