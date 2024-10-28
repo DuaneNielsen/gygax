@@ -34,8 +34,13 @@ which would significantly complicate things
 
 ActionTuple = namedtuple('ActionTuple', ['source_party', 'source_character', 'action', 'target_party', 'target_slot'])
 
+
 def legal_actions_by_action_resource(action_resources):
     legal_actions = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.bool)
+
+    # end turn does not require resources
+    legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(TRUE)
+
     # weapons require an action or an attack resource
     actions = action_resources[:, :, ActionResourceType.ACTION] > 0
     attacks = action_resources[:, :, ActionResourceType.ATTACK] > 0
@@ -66,17 +71,8 @@ def _legal_actions(scene):
     legal_actions = legal_actions & legal_actions_by_player_position(scene.party.pos, scene.party.actions.legal_use_pos)
     legal_actions = legal_actions & scene.party.actions.legal_target_pos
 
-    # end turn is always a legal action
-    legal_actions = legal_actions.at[:, :, Actions.END_TURN].set(TRUE)
     return legal_actions
 
-
-
-# @chex.dataclass
-# class ActionArray:
-#     action: jax.ArrayDevice
-#     source_party: chex.ArrayDevice
-#     source_character: chex.ArrayDevice
 
 def encode_action(action, source_party, source_character, target_party, target_slot):
     multi_index = [source_party, source_character, action, target_party, target_slot]
@@ -188,6 +184,7 @@ def init_scene(config=None):
             # action resources
             party.action_resources_start_turn = party.action_resources_start_turn.at[P, C, ActionResourceType.ACTION].set(1)
             party.action_resources_start_turn = party.action_resources_start_turn.at[P, C, ActionResourceType.BONUS_ACTION].set(1)
+            party.action_resources = jnp.copy(party.action_resources_start_turn)
 
             # armor class
             dex_ability_modifier = ability_modifier(character_sheet[CharacterSheet.ABILITIES][Abilities.DEX])
@@ -196,7 +193,11 @@ def init_scene(config=None):
             armour_class = character_sheet[CharacterSheet.ARMOR].ac + ac_dex_bonus + has_shield * 2
             party.armor_class = party.armor_class.at[P, C].set(armour_class)
 
-            # # melee weapon
+            # end turn action
+            party.actions.legal_use_pos = party.actions.legal_use_pos.at[:, :, Actions.END_TURN].set(True)
+            party.actions.legal_target_pos = party.actions.legal_target_pos.at[:, :, Actions.END_TURN, :, :].set(True)
+
+            # melee weapon
             item = convert_equipment(character_sheet[CharacterSheet.MAIN_HAND])
             party.actions = jax.tree.map(lambda x, y : x.at[P, C, Actions.ATTACK_MELEE_WEAPON].set(y), party.actions, item)
 
@@ -259,13 +260,25 @@ def _win_check(state):
 
 
 def end_turn(state, action):
-    new_tt = turn_tracker.next_turn(state.scene.turn_tracker, action.source_party, action.source_character)
-    f = lambda new, old: jnp.where(action.action == Actions.END_TURN, new, old)
-    state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
+    jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
+    state.scene.turn_tracker = turn_tracker.next_turn(state.scene.turn_tracker,
+                                                      action.action == Actions.END_TURN,
+                                                      action.source_party,
+                                                      action.source_character)
+    # f = lambda new, old: jnp.where(action.action == Actions.END_TURN, new, old)
+    jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
+    # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
+    # jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
     return state
 
 
 def weapon_attack(state, action):
+
+    # deterministic attack
+    # damage = state.scene.party.actions.damage
+    # target_character = state.scene.party.pos[action.target_party, action.target_slot]
+    # target_ac = state.scene.party.armor_class[action.target_party, target_character]
+
 
     # f = lambda new, old: jnp.where(action == Actions.END_TURN, new_state, state)
     # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)

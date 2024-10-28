@@ -90,11 +90,11 @@ def _next_cohort(turn_tracker, actions_remain: Array):
     return turn_tracker
 
 
-def next_turn(turn_tracker, end_turn_party, end_turn_character):
+def next_turn(turn_tracker, end_turn, end_turn_party, end_turn_character):
 
     # if all characters ended turn, reset the counter
     turn_tracker.end_turn = jnp.where(jnp.all(turn_tracker.end_turn), jnp.zeros_like(turn_tracker.end_turn), turn_tracker.end_turn)
-    turn_tracker.end_turn = turn_tracker.end_turn.at[end_turn_party, end_turn_character].set(jnp.bool(True))
+    turn_tracker.end_turn = turn_tracker.end_turn.at[end_turn_party, end_turn_character].set(jnp.bool(end_turn))
 
     # have any characters in the current round not ended their turn?
     actions_remain = jnp.any(turn_tracker.characters_acting & ~turn_tracker.end_turn)

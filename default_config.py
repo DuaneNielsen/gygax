@@ -4,7 +4,6 @@ from equipment.armor import armor
 from equipment.weapons import weapons
 from equipment.equipment import empty
 
-
 fighter = {
     CharacterSheet.ABILITIES: {
         Abilities.STR: 16,
@@ -71,7 +70,7 @@ wizard = {
 
 default_config = {
     ConfigItems.PARTY: {
-        constants.Party.PC: {'riverwind': fighter, 'goldmoon': cleric, 'jimmy': rogue, 'fizban': wizard},
-        constants.Party.NPC: {'pikachu': fighter, 'clarion': cleric, 'joffrey': rogue, 'raistlin': wizard}
+        constants.Party.PC: {'fizban': wizard, 'jimmy': rogue, 'goldmoon': cleric, 'riverwind': fighter},
+        constants.Party.NPC: {'raistlin': wizard, 'joffrey': rogue, 'clarion': cleric, 'pikachu': fighter}
     }
 }
