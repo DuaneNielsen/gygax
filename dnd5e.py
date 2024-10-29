@@ -56,31 +56,34 @@ def legal_actions_by_player_position(pos, legal_use_pos):
     :param legal_use_pos: (Party, Characters, Action, Position)
     :return: boolean (Party, Characters, Action, 1, 1)
     """
-    R_PLAYER = jnp.arange(N_PLAYERS)[:, None, None]
-    R_PARTY = jnp.arange(N_CHARACTERS)[None, :, None]
-    R_ACTION_SLOTS = jnp.arange(N_ACTIONS)[None, None, :]
+    leading_idx = jnp.indices(legal_use_pos.shape[0:3])
     POS = pos[:, :, None]
-    legal_pos_for_action = legal_use_pos[R_PLAYER, R_PARTY, R_ACTION_SLOTS, POS]
+
+    legal_pos_for_action = legal_use_pos[*leading_idx, POS]
     return legal_pos_for_action[..., jnp.newaxis, jnp.newaxis]
 
 
-def _legal_actions(scene):
+def _legal_actions(scene, current_player):
     legal_actions = jnp.ones((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS), dtype=jnp.bool)
     legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)
     legal_actions = legal_actions & scene.turn_tracker.characters_acting[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
     legal_actions = legal_actions & legal_actions_by_player_position(scene.party.pos, scene.party.actions.legal_use_pos)
     legal_actions = legal_actions & scene.party.actions.legal_target_pos
 
-    return legal_actions
+    return legal_actions[current_player]
 
 
-def encode_action(action, source_party, source_character, target_party, target_slot):
-    multi_index = [source_party, source_character, action, target_party, target_slot]
-    return jnp.ravel_multi_index(multi_index, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
+def encode_action(action, source_character, target_party, target_slot):
+    multi_index = [source_character, action, target_party, target_slot]
+    return jnp.ravel_multi_index(multi_index, [N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
 
 
-def decode_action(encoded_action):
-    return ActionTuple(*jnp.unravel_index(encoded_action, [N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS]))
+
+def decode_action(encoded_action, current_player):
+    source_character, action, target_party, target_slot = jnp.unravel_index(encoded_action, [N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
+    # reverse the target party for NPCs
+    target_party = (target_party + current_player) % N_PLAYERS
+    return ActionTuple(current_player, source_character, action, target_party, target_slot)
 
 
 @chex.dataclass
@@ -242,7 +245,7 @@ class State:
 
 def _init(rng: jax.random.PRNGKey, config) -> State:
     scene = init_scene(config)
-    legal_action_mask: Array = _legal_actions(scene)
+    legal_action_mask: Array = _legal_actions(scene, current_player=jnp.array([constants.Party.PC]))
 
     return State(
         scene=scene,
@@ -265,28 +268,24 @@ def end_turn(state, action):
                                                       action.action == Actions.END_TURN,
                                                       action.source_party,
                                                       action.source_character)
-    # f = lambda new, old: jnp.where(action.action == Actions.END_TURN, new, old)
-    jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
-    # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
-    # jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
     return state
 
 
 def weapon_attack(state, action):
 
     # deterministic attack
-    # damage = state.scene.party.actions.damage
-    # target_character = state.scene.party.pos[action.target_party, action.target_slot]
+    damage = state.scene.party.actions.damage[action.source_party, action.source_character, action.action]
+    target_character = state.scene.party.pos[action.target_party, action.target_slot]
     # target_ac = state.scene.party.armor_class[action.target_party, target_character]
-
-
-    # f = lambda new, old: jnp.where(action == Actions.END_TURN, new_state, state)
-    # state.scene.turn_tracker = jax.tree_map(f, new_tt, state.scene.turn_tracker)
+    jax.debug.print('dam {} target_party{} target_char{}', damage, action.target_party, target_character)
+    new_hp = state.scene.party.hitpoints[action.target_party, target_character] - damage
+    state.scene.party.hitpoints = state.scene.party.hitpoints.at[action.target_party, target_character].set(new_hp)
+    # state.scene.party.hitpoints = jnp.where(action.action==Actions.ATTACK_RANGED_WEAPON, new_hitpoints, state.scene.party.hitpoints)
     return state
 
 
 def _step(state: State, action: Array) -> State:
-    action = decode_action(action)
+    action = decode_action(action, state.current_player)
     jax.debug.print('action {} source_party {} source_character {}', action.action, action.source_party, action.source_character)
 
     # actions that take effect on the turn start occur before this line
@@ -303,7 +302,7 @@ def _step(state: State, action: Array) -> State:
         lambda: jnp.zeros(2, jnp.float32),
     )
 
-    legal_action_mask: Array = _legal_actions(state.scene)
+    legal_action_mask = _legal_actions(state.scene, state.current_player)
 
     return state.replace(
         legal_action_mask=legal_action_mask.ravel(),  # ravel flattens the action_mask

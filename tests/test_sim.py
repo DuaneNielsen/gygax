@@ -15,7 +15,7 @@ def test_sim():
     state = env.init(rng_init)
 
     """
-    starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['', '', '', '']
+    starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['raistlin', 'joffrey', '', '']
     """
 
     assert jnp.all(state.scene.party.ability_modifier[:, :, Abilities.DEX] == jnp.array([
@@ -47,21 +47,46 @@ def test_sim():
     assert state.scene.party.actions.damage[0, 3, Actions.ATTACK_RANGED_WEAPON] == 4.5
     assert state.scene.party.actions.damage_type[0, 3, Actions.ATTACK_RANGED_WEAPON] == constants.DamageType.PIERCING
 
-    # take the first step here
-
-    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 0, 1, 1, 3)
-
-    assert state.legal_action_mask[action] == True
-
-    state = env.step(state, action)
-    assert state.terminated == False
+    # first move, jimmy attacks pikachu
+    assert state.current_player == 0
     assert state.scene.turn_tracker.initiative == 3
     assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
         [0, 1, 0, 0],
         [0, 0, 0, 0]
     ]))
 
-    action = dnd5e.encode_action(Actions.END_TURN, 0, 1, 0, 0)
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 3)
+
+    assert state.legal_action_mask[action] == True
+
+    state = env.step(state, action)
+    assert state.terminated == False
+    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5
+
+    # end turn after taking first move
+
+    action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
+    assert state.legal_action_mask[action] == True
+    state = env.step(state, action)
+    assert state.terminated == False
+
+    # second move joffrey attacks jimmy
+    assert state.current_player == 1
+    assert state.scene.turn_tracker.initiative == 3
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 0, 0, 0],
+        [0, 1, 0, 0]
+    ]))
+
+    assert jnp.all(
+        state.scene.party.actions.legal_use_pos[1, 2, Actions.ATTACK_RANGED_WEAPON] == jnp.array([1, 1, 0, 0]))
+    assert jnp.all(state.scene.party.actions.legal_target_pos[1, 2, Actions.ATTACK_RANGED_WEAPON] == jnp.array([
+        [0, 0, 0, 0],
+        [1, 1, 1, 1]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 1)
+    assert state.current_player == 1
     assert state.legal_action_mask[action] == True
 
     state = env.step(state, action)
@@ -71,15 +96,127 @@ def test_sim():
         [0, 0, 0, 0],
         [0, 1, 0, 0]
     ]))
+    assert state.scene.party.hitpoints[0, 1] == 8.0 - 3.5
 
-    action = dnd5e.encode_action(Actions.END_TURN, 1, 1, 0, 0)
+    action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
-
     assert state.terminated == False
+
+    # third move riverwind attacks pikachu
+    assert state.current_player == 0
     assert state.scene.turn_tracker.initiative == 1
     assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
         [0, 0, 1, 1],
         [0, 0, 0, 0]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 3, TargetParty.ENEMY, 3)
+    assert state.current_player == 0
+    state = env.step(state, action)
+    assert state.legal_action_mask[action] == True
+    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5 - 4.5
+    action = dnd5e.encode_action(Actions.END_TURN, 3, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # fourth move - goldmoon attacks pikachu
+
+    assert state.current_player == 0
+    assert state.scene.turn_tracker.initiative == 1
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 0, 1, 1],
+        [0, 0, 0, 0]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 2, TargetParty.ENEMY, 3)
+    state = env.step(state, action)
+    assert state.legal_action_mask[action] == True
+    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5 - 4.5 - 3.5
+    action = dnd5e.encode_action(Actions.END_TURN, 2, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # fifth move pikachu attacks goldmoon
+    assert state.current_player == 1
+    assert state.scene.turn_tracker.initiative == 1
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 0, 0, 0],
+        [0, 0, 1, 1]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 3, TargetParty.ENEMY, 2)
+    state = env.step(state, action)
+    assert state.legal_action_mask[action] == True
+    assert state.scene.party.hitpoints[0, 2] == 11 - 4.5
+
+    action = dnd5e.encode_action(Actions.END_TURN, 3, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # sixth move - clarion attacks goldmoon
+    assert state.current_player == 1
+    assert state.scene.turn_tracker.initiative == 1
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 0, 0, 0],
+        [0, 0, 1, 1]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 2, TargetParty.ENEMY, 2)
+    assert state.current_player == 1
+    state = env.step(state, action)
+    assert state.legal_action_mask[action] == True
+    assert state.scene.party.hitpoints[0, 2] == 11 - 4.5 - 3.5
+    action = dnd5e.encode_action(Actions.END_TURN, 2, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # seventh move - fizban shoots pikachu
+    assert state.current_player == 0
+    assert state.scene.turn_tracker.initiative == -1
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [1, 0, 0, 0],
+        [0, 0, 0, 0]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 0, TargetParty.ENEMY, 3)
+    state = env.step(state, action)
+    assert state.legal_action_mask[action] == True
+    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5 - 4.5 - 3.5 - 3.5
+    action = dnd5e.encode_action(Actions.END_TURN, 0, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # eighth move - raistlin shoots goldmoon
+    assert state.current_player == 1
+    assert state.scene.turn_tracker.initiative == -1
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 0, 0, 0],
+        [1, 0, 0, 0]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 0, TargetParty.ENEMY, 2)
+    state = env.step(state, action)
+    assert state.legal_action_mask[action] == True
+    assert state.scene.party.hitpoints[0, 2] == 11 - 4.5 - 3.5 - 3.5
+    action = dnd5e.encode_action(Actions.END_TURN, 0, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # ninth move, jimmy shoots raistlin
+    assert state.current_player == 0
+    assert state.scene.turn_tracker.initiative == 3
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 1, 0, 0],
+        [0, 0, 0, 0]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 0)
+    assert state.legal_action_mask[action] == True
+    state = env.step(state, action)
+    assert state.scene.party.hitpoints[1, 0] == 6 - 3.5
+    action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
+    state = env.step(state, action)
+
+    # tenth move
+    assert state.current_player == 1
+    assert state.scene.turn_tracker.initiative == 3
+    assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
+        [0, 0, 0, 0],
+        [0, 1, 0, 0]
     ]))
 
 
@@ -126,7 +263,7 @@ def test_legal_actions():
     rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
     state = env.init(rng_init)
 
-    legal_actions = dnd5e._legal_actions(state.scene)
+    legal_actions = dnd5e._legal_actions(state.scene, current_player=jnp.array([0]))
 
     assert legal_actions[0, 2, Actions.ATTACK_MELEE_WEAPON, 0, 0] == False
     assert legal_actions[0, 2, Actions.ATTACK_MELEE_WEAPON, 1, 1] == False
@@ -163,7 +300,7 @@ def test_vmap():
         [-1, 3, 1, 1]
     ]))
 
-    action = dnd5e.encode_action(Actions.END_TURN, 0, 1, 0, 0)
+    action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
     action = jnp.array([action, action])
     state = step(state, action)
 
@@ -184,22 +321,22 @@ def test_action_encode():
     source_character = jnp.array([2, 3])
     target_party = jnp.array([1, 0])
     target_slot = jnp.array([1, 2])
-    enc_action = dnd5e.encode_action(action, source_party, source_character, target_party, target_slot)
-    dec_action = dnd5e.decode_action(enc_action)
+    enc_action = dnd5e.encode_action(action, source_character, target_party, target_slot)
+    dec_action = dnd5e.decode_action(enc_action, source_party)
     assert jnp.all(action == dec_action.action)
     assert jnp.all(source_party == dec_action.source_party)
     assert jnp.all(source_character == dec_action.source_character)
-    assert jnp.all(target_party == dec_action.target_party)
+    assert jnp.all((target_party + source_party) % 2 == dec_action.target_party) # the target party switches depending upon the player
     assert jnp.all(target_slot == dec_action.target_slot)
 
 
 def test_legal_actions():
     scene = dnd5e.init_scene(None)
-    legal_action_mask = dnd5e._legal_actions(scene)
+    legal_action_mask = dnd5e._legal_actions(scene, current_player=jnp.array([0]))
     legal_action_mask = legal_action_mask.ravel()
 
     for character in range(N_CHARACTERS):
-        action = dnd5e.encode_action(Actions.END_TURN, Party.PC, character, 0, 0)
+        action = dnd5e.encode_action(Actions.END_TURN, character, 0, 0)
         print(action, legal_action_mask[action])
 
     print(legal_action_mask)

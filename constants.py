@@ -61,6 +61,11 @@ class Party(IntEnum):
     NPC = 1
 
 
+class TargetParty(IntEnum):
+    FRIENDLY = 0
+    ENEMY = 1
+
+
 class CharacterSheet(StrEnum):
     ABILITIES = auto()
     HITPOINTS = auto()
