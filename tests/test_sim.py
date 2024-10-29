@@ -300,9 +300,24 @@ def test_vmap():
         [-1, 3, 1, 1]
     ]))
 
+    # jimmy shoots pikachu
+
+    assert state.current_player[0] == 0
+    assert state.scene.turn_tracker.initiative[0] == 3
+    assert jnp.all(state.scene.turn_tracker.characters_acting[0] == jnp.array([
+        [0, 1, 0, 0],
+        [0, 0, 0, 0]
+    ]))
+
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 3)
+    assert state.legal_action_mask[0, action] == True
+    state = step(state, jnp.array([action, action]))
+    assert state.scene.party.hitpoints[0, 1, 3] == 13 - 3.5
+
     action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
-    action = jnp.array([action, action])
-    state = step(state, action)
+    state = step(state, jnp.array([action, action]))
+
+    # joffrey shoots
 
     assert state.scene.turn_tracker.initiative[0] == 3
     assert jnp.all(state.scene.turn_tracker.characters_acting[1] == jnp.array([
