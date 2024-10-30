@@ -15,8 +15,11 @@ def test_sim():
     state = env.init(rng_init)
 
     """
-    starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['raistlin', 'joffrey', '', '']
+    starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['raistlin', 'joffrey', 'clarion', 'pikachu']
     """
+
+    fizban, jimmy, goldmoon, riverwind = (0, 0), (0, 1), (0, 2), (0, 3)
+    raistlin, joffrey, clarion, pikachu = (1, 0), (1, 1), (1, 2), (1, 3)
 
     assert jnp.all(state.scene.party.ability_modifier[:, :, Abilities.DEX] == jnp.array([
         [-1, 3, 1, 1],
@@ -54,20 +57,22 @@ def test_sim():
         [0, 1, 0, 0],
         [0, 0, 0, 0]
     ]))
+    assert state.scene.party.action_resources[*jimmy, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 3)
-
     assert state.legal_action_mask[action] == True
 
     state = env.step(state, action)
     assert state.terminated == False
     assert state.scene.party.hitpoints[1, 3] == 13 - 3.5
+    assert state.scene.party.action_resources[*jimmy, ActionResourceType.ACTION] == 0
 
     # end turn after taking first move
 
     action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
     assert state.legal_action_mask[action] == True
     state = env.step(state, action)
+    assert state.scene.party.action_resources[*jimmy, ActionResourceType.ACTION] == 0
     assert state.terminated == False
 
     # second move joffrey attacks jimmy
@@ -84,19 +89,20 @@ def test_sim():
         [0, 0, 0, 0],
         [1, 1, 1, 1]
     ]))
+    assert state.scene.party.action_resources[*joffrey, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 1)
-    assert state.current_player == 1
     assert state.legal_action_mask[action] == True
 
     state = env.step(state, action)
     assert state.terminated == False
+    assert state.scene.party.action_resources[*joffrey, ActionResourceType.ACTION] == 0
     assert state.scene.turn_tracker.initiative == 3
     assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
         [0, 0, 0, 0],
         [0, 1, 0, 0]
     ]))
-    assert state.scene.party.hitpoints[0, 1] == 8.0 - 3.5
+    assert state.scene.party.hitpoints[*jimmy] == 8.0 - 3.5
 
     action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
@@ -109,12 +115,13 @@ def test_sim():
         [0, 0, 1, 1],
         [0, 0, 0, 0]
     ]))
+    assert state.scene.party.action_resources[*riverwind, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 3, TargetParty.ENEMY, 3)
-    assert state.current_player == 0
-    state = env.step(state, action)
     assert state.legal_action_mask[action] == True
-    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5 - 4.5
+    state = env.step(state, action)
+    assert state.scene.party.action_resources[*riverwind, ActionResourceType.ACTION] == 0
+    assert state.scene.party.hitpoints[*pikachu] == 13 - 3.5 - 4.5
     action = dnd5e.encode_action(Actions.END_TURN, 3, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
@@ -127,10 +134,12 @@ def test_sim():
         [0, 0, 0, 0]
     ]))
 
+    assert state.scene.party.action_resources[*goldmoon, ActionResourceType.ACTION] == 1
     action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 2, TargetParty.ENEMY, 3)
-    state = env.step(state, action)
     assert state.legal_action_mask[action] == True
-    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5 - 4.5 - 3.5
+    state = env.step(state, action)
+    assert state.scene.party.action_resources[*goldmoon, ActionResourceType.ACTION] == 0
+    assert state.scene.party.hitpoints[*pikachu] == 13 - 3.5 - 4.5 - 3.5
     action = dnd5e.encode_action(Actions.END_TURN, 2, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
@@ -141,10 +150,12 @@ def test_sim():
         [0, 0, 0, 0],
         [0, 0, 1, 1]
     ]))
+    assert state.scene.party.action_resources[*pikachu, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 3, TargetParty.ENEMY, 2)
-    state = env.step(state, action)
     assert state.legal_action_mask[action] == True
+    state = env.step(state, action)
+    assert state.scene.party.action_resources[*pikachu, ActionResourceType.ACTION] == 0
     assert state.scene.party.hitpoints[0, 2] == 11 - 4.5
 
     action = dnd5e.encode_action(Actions.END_TURN, 3, TargetParty.FRIENDLY, 0)
@@ -157,12 +168,15 @@ def test_sim():
         [0, 0, 0, 0],
         [0, 0, 1, 1]
     ]))
+    assert state.scene.party.action_resources[*clarion, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 2, TargetParty.ENEMY, 2)
-    assert state.current_player == 1
-    state = env.step(state, action)
     assert state.legal_action_mask[action] == True
+
+    state = env.step(state, action)
+    assert state.scene.party.action_resources[*clarion, ActionResourceType.ACTION] == 0
     assert state.scene.party.hitpoints[0, 2] == 11 - 4.5 - 3.5
+
     action = dnd5e.encode_action(Actions.END_TURN, 2, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
@@ -173,11 +187,14 @@ def test_sim():
         [1, 0, 0, 0],
         [0, 0, 0, 0]
     ]))
+    assert state.scene.party.action_resources[*fizban, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 0, TargetParty.ENEMY, 3)
-    state = env.step(state, action)
     assert state.legal_action_mask[action] == True
-    assert state.scene.party.hitpoints[1, 3] == 13 - 3.5 - 4.5 - 3.5 - 3.5
+    state = env.step(state, action)
+    assert state.scene.party.action_resources[*fizban, ActionResourceType.ACTION] == 0
+
+    assert state.scene.party.hitpoints[*pikachu] == 13 - 3.5 - 4.5 - 3.5 - 3.5
     action = dnd5e.encode_action(Actions.END_TURN, 0, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
@@ -188,25 +205,31 @@ def test_sim():
         [0, 0, 0, 0],
         [1, 0, 0, 0]
     ]))
+    assert state.scene.party.action_resources[*raistlin, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 0, TargetParty.ENEMY, 2)
-    state = env.step(state, action)
     assert state.legal_action_mask[action] == True
+    state = env.step(state, action)
+    assert state.scene.party.action_resources[*raistlin, ActionResourceType.ACTION] == 0
     assert state.scene.party.hitpoints[0, 2] == 11 - 4.5 - 3.5 - 3.5
     action = dnd5e.encode_action(Actions.END_TURN, 0, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
     # ninth move, jimmy shoots raistlin
+    print('ninth move, jimmy shoots raistlin')
+    assert state.scene.turn_tracker.on_turn_start == False
     assert state.current_player == 0
     assert state.scene.turn_tracker.initiative == 3
     assert jnp.all(state.scene.turn_tracker.characters_acting == jnp.array([
         [0, 1, 0, 0],
         [0, 0, 0, 0]
     ]))
+    assert state.scene.party.action_resources[*jimmy, ActionResourceType.ACTION] == 1
 
     action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 0)
     assert state.legal_action_mask[action] == True
     state = env.step(state, action)
+    assert state.scene.party.action_resources[*jimmy, ActionResourceType.ACTION] == 0
     assert state.scene.party.hitpoints[1, 0] == 6 - 3.5
     action = dnd5e.encode_action(Actions.END_TURN, 1, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
@@ -332,18 +355,23 @@ def test_vmap():
 
 def test_action_encode():
     action = jnp.array([Actions.END_TURN, Actions.ATTACK_MELEE_WEAPON])
-    source_party = jnp.array([0, 1])
+    current_party = jnp.array([Party.PC, Party.NPC])
     source_character = jnp.array([2, 3])
-    target_party = jnp.array([1, 0])
+    target_party = jnp.array([TargetParty.ENEMY, TargetParty.FRIENDLY])
     target_slot = jnp.array([1, 2])
+    pos = jnp.array([
+        [0, 1, 2, 3],
+        [3, 2, 1, 0]
+    ])
     enc_action = dnd5e.encode_action(action, source_character, target_party, target_slot)
-    dec_action = dnd5e.decode_action(enc_action, source_party)
+    dec_action = dnd5e.decode_action(enc_action, current_party, pos)
     assert jnp.all(action == dec_action.action)
-    assert jnp.all(source_party == dec_action.source_party)
-    assert jnp.all(source_character == dec_action.source_character)
-    assert jnp.all((target_party + source_party) % 2 == dec_action.target_party) # the target party switches depending upon the player
-    assert jnp.all(target_slot == dec_action.target_slot)
-
+    assert jnp.all(current_party == dec_action.source.party)
+    assert jnp.all(source_character == dec_action.source.index)
+    assert jnp.all((target_party + current_party) % 2 == dec_action.target_slot.party)  # the target party switches depending upon the player
+    assert jnp.all(target_slot == dec_action.target_slot.slot)
+    assert dec_action.target.index[0] == 2
+    assert dec_action.target.index[1] == 1
 
 def test_legal_actions():
     scene = dnd5e.init_scene(None)
@@ -368,33 +396,33 @@ def test_next_cohort():
     assert jnp.all(tt.turn_order == jnp.array([0, 3, 1, 2]))
     assert jnp.all(tt.turn == jnp.all(jnp.zeros(2, dtype=jnp.int32)))
     assert tt.initiative == 3
-    tt = turn_tracker.end_on_character_start(tt)
+    tt = turn_tracker.clear_events(tt)
 
     tt = turn_tracker._next_cohort(tt, actions_remain=TRUE)
     assert tt.initiative == 3
     assert tt.cohort[tt.party] == 0
     assert tt.turn[tt.party] == 0
-    tt = turn_tracker.end_on_character_start(tt)
+    tt = turn_tracker.clear_events(tt)
 
     tt = turn_tracker._next_cohort(tt, actions_remain=FALSE)
     assert tt.initiative == 0
     assert tt.cohort[tt.party] == 2
     assert tt.turn[tt.party] == 0
-    tt = turn_tracker.end_on_character_start(tt)
+    tt = turn_tracker.clear_events(tt)
 
     tt = turn_tracker._next_cohort(tt, actions_remain=FALSE)
     assert tt.cohort[tt.party] == 3
     assert tt.initiative == -1
     assert tt.turn[tt.party] == 0
 
-    tt = turn_tracker.end_on_character_start(tt)
+    tt = turn_tracker.clear_events(tt)
 
     tt = turn_tracker._next_cohort(tt, actions_remain=FALSE)
     assert tt.cohort[tt.party] == 0
     assert tt.initiative == 3
     assert tt.turn[tt.party] == 1
 
-    tt = turn_tracker.end_on_character_start(tt)
+    tt = turn_tracker.clear_events(tt)
 
 
 def test_next_turn():
@@ -407,6 +435,7 @@ def test_next_turn():
 
     for _ in range(3):
         # opening round
+        assert tt.on_turn_start == True
         assert tt.party == 0
         assert tt.initiative == 3
         assert jnp.all(tt.characters_acting == jnp.array([
@@ -417,10 +446,17 @@ def test_next_turn():
             [1, 0, 0, 1],
             [0, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        assert jnp.all(tt.end_turn == jnp.array([
+            [0, 0, 0, 0],
+            [0, 0, 0, 0]
+        ]))
+
+        tt = turn_tracker.clear_events(tt)
+        assert tt.on_turn_start == False
 
         # first action, dont end turn
         tt = turn_tracker.next_turn(tt, False, 0, 0)
+        assert tt.on_turn_start == False
         assert tt.party == 0
         assert tt.initiative == 3
         assert jnp.all(tt.characters_acting == jnp.array([
@@ -431,7 +467,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [0, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # first end_turn action
         tt = turn_tracker.next_turn(tt, True, 0, 0)
@@ -445,7 +481,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [0, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # second end turn action
         tt = turn_tracker.next_turn(tt, True, 0, 3)
@@ -459,7 +495,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [1, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # third end turn action
         tt = turn_tracker.next_turn(tt, True, 1, 0)
@@ -473,7 +509,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [0, 0, 0, 1]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # fourth end turn action
         tt = turn_tracker.next_turn(tt, False, 1, 3)
@@ -487,7 +523,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [0, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         tt = turn_tracker.next_turn(tt, True, 1, 3)
         assert tt.party == 0
@@ -500,7 +536,7 @@ def test_next_turn():
             [0, 1, 0, 0],
             [0, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # fifth end turn action
         tt = turn_tracker.next_turn(tt, True, 0, 1)
@@ -514,7 +550,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [0, 0, 1, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # sixth end turn action
         tt = turn_tracker.next_turn(tt, True, 1, 2)
@@ -528,7 +564,7 @@ def test_next_turn():
             [0, 0, 1, 0],
             [0, 0, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # seventh end turn action
         tt = turn_tracker.next_turn(tt, True, 0, 2)
@@ -542,7 +578,7 @@ def test_next_turn():
             [0, 0, 0, 0],
             [0, 1, 0, 0]
         ]))
-        tt = turn_tracker.end_on_character_start(tt)
+        tt = turn_tracker.clear_events(tt)
 
         # final end turn
         tt = turn_tracker.next_turn(tt, True, 1, 1)

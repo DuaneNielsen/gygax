@@ -31,8 +31,11 @@ It also allows us to use alphazero without needing to add "chance nodes" for sto
 which would significantly complicate things 
 """
 
-
-ActionTuple = namedtuple('ActionTuple', ['source_party', 'source_character', 'action', 'target_party', 'target_slot'])
+# CharacterAction = namedtuple('Character', ['source_party', 'source_character', ])
+Damage = namedtuple('Damage', ['amount', 'type'])
+Character = namedtuple('Character', ['party', 'index'])
+CharacterSlot = namedtuple('Character', ['party', 'slot'])
+ActionTuple = namedtuple('ActionTuple', ['source', 'action', 'target', 'target_slot'])
 
 
 def legal_actions_by_action_resource(action_resources):
@@ -78,12 +81,15 @@ def encode_action(action, source_character, target_party, target_slot):
     return jnp.ravel_multi_index(multi_index, [N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
 
 
-
-def decode_action(encoded_action, current_player):
-    source_character, action, target_party, target_slot = jnp.unravel_index(encoded_action, [N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
+def decode_action(encoded_action, current_player, pos):
+    source_character, action, target_party, target_slot = jnp.unravel_index(encoded_action,
+                                                                            [N_CHARACTERS, N_ACTIONS, N_PLAYERS,
+                                                                             N_CHARACTERS])
     # reverse the target party for NPCs
     target_party = (target_party + current_player) % N_PLAYERS
-    return ActionTuple(current_player, source_character, action, target_party, target_slot)
+    target_character = pos[target_party, target_slot]
+    return ActionTuple(Character(current_player, source_character), action, Character(target_party, target_character),
+                       CharacterSlot(target_party, target_slot))
 
 
 @chex.dataclass
@@ -127,6 +133,7 @@ def convert_equipment(item: Equipment):
                 legal_target_pos=jnp.array([[0, 0, 0, 0], [1, 1, 1, 1]], dtype=jnp.bool),
                 resource_requirement=jnp.array(ActionResourceType.ATTACK, dtype=jnp.int32),
             )
+
 
 @chex.dataclass
 class Party:
@@ -185,8 +192,10 @@ def init_scene(config=None):
             party.hitpoints = party.hitpoints.at[P, C].set(character_sheet[CharacterSheet.HITPOINTS])
 
             # action resources
-            party.action_resources_start_turn = party.action_resources_start_turn.at[P, C, ActionResourceType.ACTION].set(1)
-            party.action_resources_start_turn = party.action_resources_start_turn.at[P, C, ActionResourceType.BONUS_ACTION].set(1)
+            party.action_resources_start_turn = party.action_resources_start_turn.at[
+                P, C, ActionResourceType.ACTION].set(1)
+            party.action_resources_start_turn = party.action_resources_start_turn.at[
+                P, C, ActionResourceType.BONUS_ACTION].set(1)
             party.action_resources = jnp.copy(party.action_resources_start_turn)
 
             # armor class
@@ -202,11 +211,13 @@ def init_scene(config=None):
 
             # melee weapon
             item = convert_equipment(character_sheet[CharacterSheet.MAIN_HAND])
-            party.actions = jax.tree.map(lambda x, y : x.at[P, C, Actions.ATTACK_MELEE_WEAPON].set(y), party.actions, item)
+            party.actions = jax.tree.map(lambda x, y: x.at[P, C, Actions.ATTACK_MELEE_WEAPON].set(y), party.actions,
+                                         item)
 
             # ranged weapon
             item = convert_equipment(character_sheet[CharacterSheet.RANGED_WEAPON])
-            party.actions = jax.tree.map(lambda x, y : x.at[P, C, Actions.ATTACK_RANGED_WEAPON].set(y), party.actions, item)
+            party.actions = jax.tree.map(lambda x, y: x.at[P, C, Actions.ATTACK_RANGED_WEAPON].set(y), party.actions,
+                                         item)
 
     dex_ability_bonus = party.ability_modifier[:, :, Abilities.DEX]
 
@@ -266,32 +277,57 @@ def end_turn(state, action):
     jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
     state.scene.turn_tracker = turn_tracker.next_turn(state.scene.turn_tracker,
                                                       action.action == Actions.END_TURN,
-                                                      action.source_party,
-                                                      action.source_character)
+                                                      action.source.party, action.source.index)
+    return state
+
+
+def apply_damage(state: State, target: Character, damage: Damage):
+    new_hp = state.scene.party.hitpoints[*target] - damage.amount
+    state.scene.party.hitpoints = state.scene.party.hitpoints.at[*target].set(new_hp)
+    jax.debug.print('dam {} target_party{} target_char{}', damage.amount, target.party, target.index)
     return state
 
 
 def weapon_attack(state, action):
-
     # deterministic attack
-    damage = state.scene.party.actions.damage[action.source_party, action.source_character, action.action]
-    target_character = state.scene.party.pos[action.target_party, action.target_slot]
     # target_ac = state.scene.party.armor_class[action.target_party, target_character]
-    jax.debug.print('dam {} target_party{} target_char{}', damage, action.target_party, target_character)
-    new_hp = state.scene.party.hitpoints[action.target_party, target_character] - damage
-    state.scene.party.hitpoints = state.scene.party.hitpoints.at[action.target_party, target_character].set(new_hp)
-    # state.scene.party.hitpoints = jnp.where(action.action==Actions.ATTACK_RANGED_WEAPON, new_hitpoints, state.scene.party.hitpoints)
+    damage = Damage(
+        amount=state.scene.party.actions.damage[*action.source, action.action],
+        type=state.scene.party.actions.damage_type[*action.source, action.action])
+
+    # jax.debug.print('source {}, {}, target {}, {} damage {}, {}', *source, *target, *damage)
+
+    state = apply_damage(state, action.target, damage)
+    # action_resources = state.scene.party.action_resources.at[*action.source].set(
+    #     state.scene.party.action_resources[*action.source] - 1)
+
+    # first use up attacks, else use up an action
+    action_resources = state.scene.party.action_resources
+    has_attacks = action_resources[:, :, ActionResourceType.ATTACK, None] > 0
+    weapon_attacked = (action.action == Actions.ATTACK_MELEE_WEAPON) | (action.action == Actions.ATTACK_RANGED_WEAPON)
+    consume_action = action_resources.at[*action.source, ActionResourceType.ACTION].set(action_resources[*action.source, ActionResourceType.ACTION] - 1)
+    consume_attack = action_resources.at[*action.source, ActionResourceType.ATTACK].set(action_resources[*action.source, ActionResourceType.ATTACK] - 1)
+    action_resources = jnp.where(weapon_attacked & has_attacks, consume_attack, action_resources)
+    state.scene.party.action_resources = jnp.where(weapon_attacked & ~has_attacks, consume_action, action_resources)
+    # todo: add bonus attacks here
     return state
 
 
 def _step(state: State, action: Array) -> State:
-    action = decode_action(action, state.current_player)
-    jax.debug.print('action {} source_party {} source_character {}', action.action, action.source_party, action.source_character)
+
+    action = decode_action(action, state.current_player, state.scene.party.pos)
+    jax.debug.print('action {} source {} {} target {} {}', action.action, *action.source, *action.target)
+    state = end_turn(state, action)
+    jax.debug.print('on_turn_start {}', state.scene.turn_tracker.on_turn_start)
+    state.scene.party.action_resources = jnp.where(state.scene.turn_tracker.on_turn_start,
+                                                   state.scene.party.action_resources_start_turn,
+                                                   state.scene.party.action_resources)
+    jax.debug.print('jimmy action_resources {}', state.scene.party.action_resources[0, 1])
 
     # actions that take effect on the turn start occur before this line
-    state.scene.turn_tracker = turn_tracker.end_on_character_start(state.scene.turn_tracker)
+    state.scene.turn_tracker = turn_tracker.clear_events(state.scene.turn_tracker)
 
-    state = end_turn(state, action)
+
     state = weapon_attack(state, action)
 
     game_over, winner = _win_check(state)
