@@ -1,3 +1,5 @@
+import pytest
+
 import constants
 import dnd5e
 from pgx.experimental import act_randomly
@@ -7,6 +9,39 @@ from constants import *
 import turn_tracker
 from constants import Abilities
 import equipment.weapons as weapons
+import default_config
+from pgx.core import Array
+
+@pytest.fixture
+def state():
+    scene = dnd5e.init_scene(default_config.default_config)
+    legal_action_mask: Array = dnd5e._legal_actions(scene, current_player=jnp.array([constants.Party.PC]))
+
+    return dnd5e.State(
+        scene=scene,
+        legal_action_mask=legal_action_mask.ravel()
+    )
+
+
+
+"""
+starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['raistlin', 'joffrey', 'clarion', 'pikachu']
+"""
+
+
+fizban, jimmy, goldmoon, riverwind = (0, 0), (0, 1), (0, 2), (0, 3)
+raistlin, joffrey, clarion, pikachu = (1, 0), (1, 1), (1, 2), (1, 3)
+
+characters = {
+    'fizban': fizban,
+    'jimmy': jimmy,
+    'goldmoon': goldmoon,
+    'riverwind': riverwind,
+    'raistlin': raistlin,
+    'joffrey': joffrey,
+    'clarion': clarion,
+    'pikachu': pikachu
+}
 
 
 def test_sim():
@@ -14,12 +49,6 @@ def test_sim():
     rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
     state = env.init(rng_init)
 
-    """
-    starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['raistlin', 'joffrey', 'clarion', 'pikachu']
-    """
-
-    fizban, jimmy, goldmoon, riverwind = (0, 0), (0, 1), (0, 2), (0, 3)
-    raistlin, joffrey, clarion, pikachu = (1, 0), (1, 1), (1, 2), (1, 3)
 
     assert jnp.all(state.scene.party.ability_modifier[:, :, Abilities.DEX] == jnp.array([
         [-1, 3, 1, 1],
@@ -195,6 +224,8 @@ def test_sim():
     assert state.scene.party.action_resources[*fizban, ActionResourceType.ACTION] == 0
 
     assert state.scene.party.hitpoints[*pikachu] == 13 - 3.5 - 4.5 - 3.5 - 3.5
+    assert state.scene.party.conditions[*pikachu, Conditions.DEAD] == True
+    assert state.scene.party.action_resources[*pikachu].sum() == 0
     action = dnd5e.encode_action(Actions.END_TURN, 0, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
@@ -212,6 +243,9 @@ def test_sim():
     state = env.step(state, action)
     assert state.scene.party.action_resources[*raistlin, ActionResourceType.ACTION] == 0
     assert state.scene.party.hitpoints[0, 2] == 11 - 4.5 - 3.5 - 3.5
+    assert state.scene.party.conditions[*goldmoon, Conditions.DEAD] == True
+    assert state.scene.party.action_resources[*goldmoon].sum() == 0
+
     action = dnd5e.encode_action(Actions.END_TURN, 0, TargetParty.FRIENDLY, 0)
     state = env.step(state, action)
 
@@ -241,6 +275,9 @@ def test_sim():
         [0, 0, 0, 0],
         [0, 1, 0, 0]
     ]))
+
+    for name, index in characters.items():
+        print(name, state.scene.party.hitpoints[index].item())
 
 
 def test_legal_actions_by_player_position():
@@ -582,3 +619,12 @@ def test_next_turn():
 
         # final end turn
         tt = turn_tracker.next_turn(tt, True, 1, 1)
+
+
+
+def test_apply_death(state):
+
+    state.scene.party.hitpoints = state.scene.party.hitpoints.at[fizban].set(0)
+    state = dnd5e.apply_death(state)
+    assert state.scene.party.conditions[*fizban, Conditions.DEAD] == 1
+    assert state.scene.party.action_resources[*fizban].sum() == 0

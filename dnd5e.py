@@ -146,6 +146,7 @@ class Party:
     actions: ActionArray  # the characters equipment
     action_resources_start_turn: chex.ArrayDevice
     action_resources: chex.ArrayDevice  # number of actions remaining
+    conditions: chex.ArrayDevice  # condition stacks
 
 
 def init_party():
@@ -158,7 +159,8 @@ def init_party():
         class_ability_bonus_idx=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32),
         actions=init_actions(),
         action_resources_start_turn=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32),
-        action_resources=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32)
+        action_resources=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTION_RESOURCE_TYPES), dtype=jnp.int32),
+        conditions=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_CONDITIONS), dtype=jnp.int32)
     )
 
 
@@ -313,6 +315,14 @@ def weapon_attack(state, action):
     return state
 
 
+def apply_death(state):
+    state.scene.party.conditions = state.scene.party.conditions.at[:, :, Conditions.DEAD].set((state.scene.party.hitpoints) <= 0 * 1)
+    dead_characters = state.scene.party.conditions[:, :, Conditions.DEAD] > 0
+    zero_action_resources = jnp.zeros_like(state.scene.party.action_resources)
+    state.scene.party.action_resources = jnp.where(dead_characters[..., None], zero_action_resources, state.scene.party.action_resources)
+    return state
+
+
 def _step(state: State, action: Array) -> State:
 
     action = decode_action(action, state.current_player, state.scene.party.pos)
@@ -327,8 +337,9 @@ def _step(state: State, action: Array) -> State:
     # actions that take effect on the turn start occur before this line
     state.scene.turn_tracker = turn_tracker.clear_events(state.scene.turn_tracker)
 
-
     state = weapon_attack(state, action)
+
+    state = apply_death(state)
 
     game_over, winner = _win_check(state)
 

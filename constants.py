@@ -40,16 +40,26 @@ class Abilities(IntEnum):
 
 N_ABILITIES = len(Abilities)
 
-# action_resource_table = {
-#     Actions.END_TURN: ActionResourceUsageType.END_TURN,
-#     Actions.MOVE: ActionResourceUsageType.ACTION,
-#     Actions.ATTACK_MELEE_WEAPON: ActionResourceUsageType.ATTACK,
-#     Actions.ATTACK_RANGED_WEAPON: ActionResourceUsageType.ATTACK
-# }
 
-# ACTION_RESOURCE_TABLE = jnp.zeros((N_ACTIONS), dtype=jnp.bool_)
-# for action, action_resource in action_resource_table.items():
-#     ACTION_RESOURCE_TABLE.at[action].set(action_resource)
+class Conditions(IntEnum):
+    DEAD = 0
+    BLINDED = auto()
+    CHARMED = auto()
+    EXHAUSTED = auto()
+    FRIGHTENED = auto()
+    GRAPPLED = auto()
+    INCAPACITATED = auto()
+    INVISIBLE = auto()
+    PARALYSED = auto()
+    PETRIFIED = auto()
+    POISONED = auto()
+    PRONE = auto()
+    RESTRAINED = auto()
+    STUNNED = auto()
+    UNCONSCIOUS = auto()
+
+
+N_CONDITIONS = len(Conditions)
 
 
 class ConfigItems(StrEnum):
@@ -76,6 +86,17 @@ class CharacterSheet(StrEnum):
 
 
 class DamageType(IntEnum):
-    BLUDGEONING = 0
-    SLASHING = 1
-    PIERCING = 2
+    ACID = 0
+    BLUDGEONING = auto()
+    COLD = auto()
+    FIRE = auto()
+    FORCE = auto()
+    LIGHTNING = auto()
+    NECROTIC = auto()
+    PIERCING = auto()
+    POISON = auto()
+    RADIANT = auto()
+    SLASHING = auto()
+    THUNDER = auto()
+
+N_DAMAGE_TYPES = len(DamageType)
