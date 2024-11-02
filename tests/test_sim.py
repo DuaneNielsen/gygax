@@ -628,3 +628,35 @@ def test_apply_death(state):
     state = dnd5e.apply_death(state)
     assert state.scene.party.conditions[*fizban, Conditions.DEAD] == 1
     assert state.scene.party.action_resources[*fizban].sum() == 0
+
+
+def test_win_check(state):
+    state.scene.party.conditions = state.scene.party.conditions.at[*fizban, Conditions.DEAD].set(1)
+    game_over, winner = dnd5e._win_check(state)
+    assert game_over == False
+
+    state.scene.party.conditions = state.scene.party.conditions.at[*raistlin, Conditions.DEAD].set(1)
+    assert game_over == False
+
+    state.scene.party.conditions = state.scene.party.conditions.at[*riverwind, Conditions.DEAD].set(1)
+    state.scene.party.conditions = state.scene.party.conditions.at[*jimmy, Conditions.DEAD].set(1)
+    state.scene.party.conditions = state.scene.party.conditions.at[*clarion, Conditions.DEAD].set(1)
+    state.scene.party.conditions = state.scene.party.conditions.at[*goldmoon, Conditions.DEAD].set(1)
+
+    game_over, winner = dnd5e._win_check(state)
+    assert game_over == True
+    assert winner == 1
+
+    state.scene.party.conditions = state.scene.party.conditions.at[*riverwind, Conditions.DEAD].set(0)
+    state.scene.party.conditions = state.scene.party.conditions.at[*raistlin, Conditions.DEAD].set(1)
+    state.scene.party.conditions = state.scene.party.conditions.at[*pikachu, Conditions.DEAD].set(1)
+    state.scene.party.conditions = state.scene.party.conditions.at[*joffrey, Conditions.DEAD].set(1)
+
+    game_over, winner = dnd5e._win_check(state)
+    assert game_over == True
+    assert winner == 0
+
+
+
+
+

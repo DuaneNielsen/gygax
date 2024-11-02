@@ -271,8 +271,8 @@ def _observe(state: State, player_id: Array) -> Array:
 
 
 def _win_check(state):
-    party_killed = jnp.all(state.scene.party.hitpoints <= 0., axis=1)
-    return jnp.any(party_killed), ~jnp.argmax(party_killed)
+    party_killed = jnp.all(state.scene.party.conditions[:, :, Conditions.DEAD] > 0, axis=1)
+    return jnp.any(party_killed), (jnp.argmax(party_killed) + 1) % N_PLAYERS
 
 
 def end_turn(state, action):
