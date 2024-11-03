@@ -276,7 +276,7 @@ def _win_check(state):
 
 
 def end_turn(state, action):
-    jax.debug.print('state.scene.turn_tracker.characters_acting {}', state.scene.turn_tracker.characters_acting)
+    jax.debug.print('state.scene.turn_tracker.characters_acting \n{}', state.scene.turn_tracker.characters_acting)
     state.scene.turn_tracker = turn_tracker.next_turn(state.scene.turn_tracker,
                                                       action.action == Actions.END_TURN,
                                                       action.source.party, action.source.index)
