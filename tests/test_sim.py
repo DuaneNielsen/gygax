@@ -145,6 +145,9 @@ def test_sim():
         [0, 0, 0, 0]
     ]))
     assert state.scene.party.action_resources[*riverwind, ActionResourceType.ACTION] == 1
+    legal_action_mask = state.legal_action_mask.reshape(N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS)
+    assert jnp.all(legal_action_mask[riverwind[1], Actions.END_TURN]) == True
+    assert jnp.all(legal_action_mask[goldmoon[1], Actions.END_TURN]) == True
 
     action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 3, TargetParty.ENEMY, 3)
     assert state.legal_action_mask[action] == True
@@ -162,6 +165,9 @@ def test_sim():
         [0, 0, 1, 1],
         [0, 0, 0, 0]
     ]))
+    legal_action_mask = state.legal_action_mask.reshape(N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS)
+    assert jnp.all(legal_action_mask[riverwind[1], Actions.END_TURN]) == False
+    assert jnp.all(legal_action_mask[goldmoon[1], Actions.END_TURN]) == True
 
     assert state.scene.party.action_resources[*goldmoon, ActionResourceType.ACTION] == 1
     action = dnd5e.encode_action(Actions.ATTACK_MELEE_WEAPON, 2, TargetParty.ENEMY, 3)

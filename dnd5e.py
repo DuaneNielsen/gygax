@@ -70,6 +70,7 @@ def _legal_actions(scene, current_player):
     legal_actions = jnp.ones((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS), dtype=jnp.bool)
     legal_actions = legal_actions & legal_actions_by_action_resource(scene.party.action_resources)
     legal_actions = legal_actions & scene.turn_tracker.characters_acting[..., jnp.newaxis, jnp.newaxis, jnp.newaxis]
+    legal_actions = legal_actions & ~scene.turn_tracker.end_turn[..., None, None, None]
     legal_actions = legal_actions & legal_actions_by_player_position(scene.party.pos, scene.party.actions.legal_use_pos)
     legal_actions = legal_actions & scene.party.actions.legal_target_pos
 
