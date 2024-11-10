@@ -1,7 +1,6 @@
 import jax.numpy as jnp
 from enum import StrEnum, Enum, auto, IntEnum
 
-
 FALSE = jnp.bool_(False)
 TRUE = jnp.bool_(True)
 
@@ -26,7 +25,7 @@ class ActionResourceType(IntEnum):
     ATTACK = 2
 
 
-N_ACTION_RESOURCE_TYPES=len(ActionResourceType)
+N_ACTION_RESOURCE_TYPES = len(ActionResourceType)
 
 
 class Abilities(IntEnum):
@@ -99,4 +98,21 @@ class DamageType(IntEnum):
     SLASHING = auto()
     THUNDER = auto()
 
+
 N_DAMAGE_TYPES = len(DamageType)
+
+# scaling constants for observations
+HP_LOWER = -20  # we need this to handle death saves
+HP_UPPER = 20
+AC_LOWER = 0
+AC_UPPER = 20
+PROF_BONUS_LOWER = 0
+PROF_BONUS_UPPER = 6
+ABILITY_MODIFIER_LOWER=-5
+ABILITY_MODIFIER_UPPER=10
+CONDITION_STACKS_UPPER=5
+ACTION_RESOURCES_UPPER=5
+
+
+# actions
+DAMAGE_UPPER = 20

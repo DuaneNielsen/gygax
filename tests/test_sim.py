@@ -12,6 +12,7 @@ import equipment.weapons as weapons
 import default_config
 from pgx.core import Array
 
+
 @pytest.fixture
 def state():
     scene = dnd5e.init_scene(default_config.default_config)
@@ -19,15 +20,16 @@ def state():
 
     return dnd5e.State(
         scene=scene,
+        observation=dnd5e.Observation(
+            party=dnd5e._observe_party(scene.party)
+        ),
         legal_action_mask=legal_action_mask.ravel()
     )
-
 
 
 """
 starting postions ['fizban', 'jimmy', 'goldmoon', 'riverwind'], ['raistlin', 'joffrey', 'clarion', 'pikachu']
 """
-
 
 fizban, jimmy, goldmoon, riverwind = (0, 0), (0, 1), (0, 2), (0, 3)
 raistlin, joffrey, clarion, pikachu = (1, 0), (1, 1), (1, 2), (1, 3)
@@ -48,7 +50,6 @@ def test_sim():
     env = dnd5e.DND5E()
     rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
     state = env.init(rng_init)
-
 
     assert jnp.all(state.scene.party.ability_modifier[:, :, Abilities.DEX] == jnp.array([
         [-1, 3, 1, 1],
@@ -411,10 +412,12 @@ def test_action_encode():
     assert jnp.all(action == dec_action.action)
     assert jnp.all(current_party == dec_action.source.party)
     assert jnp.all(source_character == dec_action.source.index)
-    assert jnp.all((target_party + current_party) % 2 == dec_action.target_slot.party)  # the target party switches depending upon the player
+    assert jnp.all((
+                               target_party + current_party) % 2 == dec_action.target_slot.party)  # the target party switches depending upon the player
     assert jnp.all(target_slot == dec_action.target_slot.slot)
     assert dec_action.target.index[0] == 2
     assert dec_action.target.index[1] == 1
+
 
 def test_legal_actions():
     scene = dnd5e.init_scene(None)
@@ -627,9 +630,7 @@ def test_next_turn():
         tt = turn_tracker.next_turn(tt, True, 1, 1)
 
 
-
 def test_apply_death(state):
-
     state.scene.party.hitpoints = state.scene.party.hitpoints.at[fizban].set(0)
     state = dnd5e.apply_death(state)
     assert state.scene.party.conditions[*fizban, Conditions.DEAD] == 1
@@ -661,8 +662,3 @@ def test_win_check(state):
     game_over, winner = dnd5e._win_check(state)
     assert game_over == True
     assert winner == 0
-
-
-
-
-

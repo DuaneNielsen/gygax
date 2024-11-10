@@ -1,13 +1,115 @@
 import matplotlib.pyplot as plt
+from matplotlib.pyplot import axes
 import numpy as np
 import seaborn as sns
-from constants import N_ACTIONS, Actions, N_PLAYERS, N_CHARACTERS
+
+import constants
+from constants import *
+from default_config import default_config
 import matplotlib.gridspec as gridspec
+import jax.numpy as jnp
+from abc import ABC
 
 ACTION_NAMES = ['End Turn', 'Move', 'Melee Attack', 'Off-Hand', 'Ranged']
 N_ACTIONS = len(ACTION_NAMES)
 N_CHARS = 4
 TOTAL_TARGETS = 8  # 4 ally + 4 enemy slots
+
+
+class Plot(ABC):
+    ax: axes
+
+    def refresh(self, data):
+        pass
+
+
+class HistogramPlot(Plot):
+    def __init__(self, ax, state, player, data_key:str, title: str, xticklabels=None, character_names=None, annotate_cells=False, sum=False, scale_min=0):
+        self.ax = ax
+        self.sum = sum
+        self.scale_min = scale_min
+        self.data_key = data_key
+        self.player = player
+
+        data = self.data(state)
+
+        sns.heatmap(data, annot=annotate_cells, fmt='d',
+                    xticklabels=xticklabels,
+                    yticklabels=character_names,
+                    ax=ax, cmap='Reds',
+                    cbar_kws={'label': title})
+
+        ax.set_title(title)
+        # Rotate x-axis labels for better readability
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+
+    def data(self, state):
+
+        """Plot conditions table"""
+        data = jnp.int32(state.observation.party[self.data_key][self.player])
+        if self.sum:
+            data = data.sum(-1) + self.scale_min
+        return data
+
+    def refresh(self, state):
+        """Refresh conditions heatmap"""
+        data = self.data(state)
+
+        # Update heatmap data
+        heatmap = self.ax.collections[0]
+        heatmap.set_array(data.flatten())
+
+        # Update annotations
+        for i, text in enumerate(self.ax.texts):
+            row = i // data.shape[1]
+            col = i % data.shape[1]
+            text.set_text(f'{int(data[row, col])}')
+
+        # Update colorbar scale if needed
+        vmin, vmax = data.min(), data.max()
+        heatmap.set_clim(vmin, vmax)
+
+        # Update colorbar
+        cbar = self.ax.collections[0].colorbar
+        cbar.set_ticks(np.linspace(vmin, vmax, num=5))
+        cbar._draw_all()
+
+
+class PositionPlot(Plot):
+    def __init__(self, ax, positions):
+        self.ax = ax
+        """Plot character positions in a 1x4 grid"""
+        grid = positions.reshape(1, -1)  # Force 1x4 layout
+
+        # Plot grid with integer values
+        ax.matshow(grid, cmap='viridis')
+        for i in range(grid.shape[1]):
+            ax.text(i, 0, f'{int(grid[0, i])}',
+                    ha='center', va='center',
+                    color='white', fontsize=12)
+
+        ax.set_title('Character Positions')
+        ax.set_xticks(range(grid.shape[1]))
+        ax.set_xticklabels([f'Char {i + 1}' for i in range(grid.shape[1])])
+        ax.set_yticks([])
+
+    def refresh_positions(self, positions):
+        """Refresh character positions plot"""
+        grid = positions.reshape(1, -1)  # Force 1x4 layout
+
+        # Update grid data
+        im = self.ax.get_images()[0]
+        im.set_data(grid)
+
+        # Update text values
+        for i, txt in enumerate(self.ax.texts):
+            txt.set_text(f'{int(grid[0, i])}')
+
+        return im
+
+        # Redraw the plot
+        # ax.figure.canvas.draw()
+
 
 class PartyVisualizer:
     def __init__(self, env, state, party_idx=0):
@@ -70,7 +172,7 @@ class PartyVisualizer:
                         self.state = self.step(self.state, encoded_action)
 
                         self.refresh_action_grid(self.callback_data['axs'])  # Pass axs here
-                        self.refresh_state()
+                        self.refresh_state(self.state)
                         plt.draw()
                         return  # Exit after processing the button click
 
@@ -88,23 +190,21 @@ class PartyVisualizer:
 
                     button.set_active(is_legal)
 
+    def refresh_state(self, state):
 
-    def refresh_state(self):
+        current_player = state.current_player.item()
+        enemy_player = (state.current_player.item() + 1) % 2
 
-        self.refresh_positions(self.party0_positions_ax, 0)
-        self.refresh_hitpoints(self.party0_hitpoint_ax, 0)
-        self.refresh_armor_class(self.party0_armor_class, 0)
-        self.refresh_ability_modifiers(self.party0_ability_modifiers, 0)
-        self.refresh_action_resources(self.party0_action_resources, 0)
-        self.refresh_conditions(self.party0_conditions, 0)
+        party = dict(state.observation.party)
 
-        self.refresh_positions(self.party1_positions_ax, 1)
-        self.refresh_hitpoints(self.party1_hitpoint_ax, 1)
-        self.refresh_armor_class(self.party1_armor_class, 1)
-        self.refresh_ability_modifiers(self.party1_ability_modifiers, 1)
-        self.refresh_action_resources(self.party1_action_resources, 1)
-        self.refresh_conditions(self.party1_conditions, 1)
+        self.left_pos.refresh(state.scene.party.pos[current_player])
+        self.right_pos.refresh(state.scene.party.pos[enemy_player])
 
+        for key, plot in self.left_plots.items():
+            plot.refresh(state)
+
+        for key, plot in self.right_plots.items():
+            plot.refresh(state)
 
     def create_grid(self, fig, char_idx, ax, legal_actions):
         ax.set_title(f'Character {char_idx + 1}')
@@ -150,243 +250,9 @@ class PartyVisualizer:
             ax.set_xticks([])
             ax.set_yticks([])
 
-    def plot_positions(self, ax, party_idx):
-        """Plot character positions in a 1x4 grid"""
-        positions = self.party.pos[party_idx]
-        grid = positions.reshape(1, -1)  # Force 1x4 layout
-
-        # Plot grid with integer values
-        ax.matshow(grid, cmap='viridis')
-        for i in range(grid.shape[1]):
-            ax.text(i, 0, f'{int(grid[0, i])}',
-                    ha='center', va='center',
-                    color='white', fontsize=12)
-
-        ax.set_title('Character Positions')
-        ax.set_xticks(range(grid.shape[1]))
-        ax.set_xticklabels([f'Char {i + 1}' for i in range(grid.shape[1])])
-        ax.set_yticks([])
-        return ax
-
-    def plot_hitpoints(self, ax, party_idx):
-        """Plot character hit points"""
-        hitpoints = self.party.hitpoints[party_idx]
-        x = np.arange(len(hitpoints))
-        bars = ax.bar(x, hitpoints, color='lightgreen')
-
-        ax.set_title('Hit Points')
-        ax.set_xlabel('Character')
-        ax.set_ylabel('HP')
-        ax.set_xticks(x)
-        ax.set_xticklabels([f'Char {i + 1}' for i in x])
-
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2., height,
-                    f'{int(height)}',
-                    ha='center', va='bottom')
-        return ax
-
-    def plot_armor_class(self, ax, party_idx):
-        """Plot character armor class"""
-        ac = self.party.armor_class[party_idx]
-        x = np.arange(len(ac))
-        bars = ax.bar(x, ac, color='lightblue')
-
-        ax.set_title('Armor Class')
-        ax.set_xlabel('Character')
-        ax.set_ylabel('AC')
-        ax.set_xticks(x)
-        ax.set_xticklabels([f'Char {i + 1}' for i in x])
-
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2., height,
-                    f'{int(height)}',
-                    ha='center', va='bottom')
-        return ax
-
-    def plot_ability_modifiers(self, ax, party_idx):
-        """Plot ability modifiers table"""
-        ability_labels = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']
-        modifiers = self.party.ability_modifier[party_idx]
-
-        sns.heatmap(modifiers, annot=True, fmt='d',
-                    xticklabels=ability_labels,
-                    yticklabels=[f'Char {i + 1}' for i in range(modifiers.shape[0])],
-                    ax=ax, cmap='RdYlBu', center=0,
-                    cbar_kws={'label': 'Modifier'})
-
-        ax.set_title('Ability Modifiers')
-        return ax
-
-    def refresh_positions(self, ax, party_idx):
-        """Refresh character positions plot"""
-        positions = self.party.pos[party_idx]
-        grid = positions.reshape(1, -1)  # Force 1x4 layout
-
-        # Update grid data
-        im = ax.get_images()[0]
-        im.set_data(grid)
-
-        # Update text values
-        for i, txt in enumerate(ax.texts):
-            txt.set_text(f'{int(grid[0, i])}')
-
-        return im
-
-    def refresh_hitpoints(self, ax, party_idx):
-        """Refresh hit points bar plot"""
-        hitpoints = self.party.hitpoints[party_idx]
-
-        # Update bar heights
-        bars = ax.containers[0]
-        for bar, hp in zip(bars, hitpoints):
-            bar.set_height(hp)
-
-        # Update value labels
-        for i, (bar, txt) in enumerate(zip(bars, ax.texts)):
-            txt.set_text(f'{int(hitpoints[i])}')
-            txt.set_position((bar.get_x() + bar.get_width() / 2., hitpoints[i]))
-
-        # Update y-axis limit if needed
-        ax.relim()
-        ax.autoscale_view(scalex=False)
-
-        return bars
-
-    def refresh_armor_class(self, ax, party_idx):
-        """Refresh armor class bar plot"""
-        ac = self.party.armor_class[party_idx]
-
-        # Update bar heights
-        bars = ax.containers[0]
-        for bar, val in zip(bars, ac):
-            bar.set_height(val)
-
-        # Update value labels
-        for i, (bar, txt) in enumerate(zip(bars, ax.texts)):
-            txt.set_text(f'{int(ac[i])}')
-            txt.set_position((bar.get_x() + bar.get_width() / 2., ac[i]))
-
-        # Update y-axis limit if needed
-        ax.relim()
-        ax.autoscale_view(scalex=False)
-
-        return bars
-
-    def refresh_ability_modifiers(self, ax, party_idx):
-        """Refresh ability modifiers heatmap"""
-        modifiers = self.party.ability_modifier[party_idx]
-
-        # Update heatmap data
-        heatmap = ax.collections[0]
-        heatmap.set_array(modifiers.flatten())
-
-        # Update annotations
-        for i, text in enumerate(ax.texts):
-            row = i // modifiers.shape[1]
-            col = i % modifiers.shape[1]
-            text.set_text(f'{int(modifiers[row, col])}')
-
-        # Update colorbar scale if needed
-        vmin, vmax = modifiers.min(), modifiers.max()
-        heatmap.set_clim(vmin, vmax)
-
-        # Update colorbar
-        cbar = ax.collections[0].colorbar
-        cbar.set_ticks(np.linspace(vmin, vmax, num=5))
-        cbar._draw_all()
-
-        # Redraw the plot
-        ax.figure.canvas.draw()
-
-    def plot_action_resources(self, ax, party_idx):
-        """Plot action resources table"""
-        resources = self.party.action_resources[party_idx]
-
-        sns.heatmap(resources, annot=True, fmt='d',
-                    xticklabels=[f'Res {i + 1}' for i in range(resources.shape[1])],
-                    yticklabels=[f'Char {i + 1}' for i in range(resources.shape[0])],
-                    ax=ax, cmap='YlOrRd',
-                    cbar_kws={'label': 'Resources'})
-
-        ax.set_title('Action Resources')
-        # Rotate x-axis labels for better readability
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-        return ax
-
-    def refresh_action_resources(self, ax, party_idx):
-        """Refresh action resources heatmap"""
-        resources = self.party.action_resources[party_idx]
-
-        # Update heatmap data
-        heatmap = ax.collections[0]
-        heatmap.set_array(resources.flatten())
-
-        # Update annotations
-        for i, text in enumerate(ax.texts):
-            row = i // resources.shape[1]
-            col = i % resources.shape[1]
-            text.set_text(f'{int(resources[row, col])}')
-
-        # Update colorbar scale if needed
-        vmin, vmax = resources.min(), resources.max()
-        heatmap.set_clim(vmin, vmax)
-
-        # Update colorbar
-        cbar = ax.collections[0].colorbar
-        cbar.set_ticks(np.linspace(vmin, vmax, num=5))
-        cbar._draw_all()
-
-        # Redraw the plot
-        ax.figure.canvas.draw()
-
-    import seaborn as sns
-    import numpy as np
-
-    def plot_conditions(self, ax, party_idx):
-        """Plot conditions table"""
-        conditions = self.party.conditions[party_idx]
-
-        sns.heatmap(conditions, annot=True, fmt='d',
-                    xticklabels=[f'Cond {i + 1}' for i in range(conditions.shape[1])],
-                    yticklabels=[f'Char {i + 1}' for i in range(conditions.shape[0])],
-                    ax=ax, cmap='Reds',
-                    cbar_kws={'label': 'Stacks'})
-
-        ax.set_title('Conditions')
-        # Rotate x-axis labels for better readability
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-        return ax
-
-    def refresh_conditions(self, ax, party_idx):
-        """Refresh conditions heatmap"""
-        conditions = self.party.conditions[party_idx]
-
-        # Update heatmap data
-        heatmap = ax.collections[0]
-        heatmap.set_array(conditions.flatten())
-
-        # Update annotations
-        for i, text in enumerate(ax.texts):
-            row = i // conditions.shape[1]
-            col = i % conditions.shape[1]
-            text.set_text(f'{int(conditions[row, col])}')
-
-        # Update colorbar scale if needed
-        vmin, vmax = conditions.min(), conditions.max()
-        heatmap.set_clim(vmin, vmax)
-
-        # Update colorbar
-        cbar = ax.collections[0].colorbar
-        cbar.set_ticks(np.linspace(vmin, vmax, num=5))
-        cbar._draw_all()
-
-        # Redraw the plot
-        ax.figure.canvas.draw()
+    def get_character_names(self, player):
+        names = list(default_config[ConfigItems.PARTY][player].keys())
+        return [names[p] for p in state.scene.party.pos[player]]
 
     def visualize(self, state):
         """Create main visualization with character stats and action grid in one figure."""
@@ -394,20 +260,76 @@ class PartyVisualizer:
         gs = gridspec.GridSpec(4, 4, figure=fig, height_ratios=[1, 1, 1, 1.5])
         fig.suptitle(f'D&D 5e {self.party_name} State', size=16)
 
-        # Top rows for character stats
-        self.party0_positions_ax = self.plot_positions(fig.add_subplot(gs[0, 0]), 0)
-        self.party0_hitpoint_ax = self.plot_hitpoints(fig.add_subplot(gs[0, 1]), 0)
-        self.party0_armor_class = self.plot_armor_class(fig.add_subplot(gs[1, 0]), 0)
-        self.party0_ability_modifiers = self.plot_ability_modifiers(fig.add_subplot(gs[1, 1]), 0)
-        self.party0_action_resources = self.plot_action_resources(fig.add_subplot(gs[2, 0]), 0)
-        self.party0_conditions = self.plot_conditions(fig.add_subplot(gs[2, 1]), 0)
+        party = state.observation.party
+        current_player = state.current_player.item()
+        enemy_player = (state.current_player.item() + 1) % 2
 
-        self.party1_positions_ax = self.plot_positions(fig.add_subplot(gs[0, 2]), 1)
-        self.party1_hitpoint_ax = self.plot_hitpoints(fig.add_subplot(gs[0, 3]), 1)
-        self.party1_armor_class = self.plot_armor_class(fig.add_subplot(gs[1, 2]), 1)
-        self.party1_ability_modifiers = self.plot_ability_modifiers(fig.add_subplot(gs[1, 3]), 1)
-        self.party1_action_resources = self.plot_action_resources(fig.add_subplot(gs[2, 2]), 1)
-        self.party1_conditions = self.plot_conditions(fig.add_subplot(gs[2, 3]), 1)
+        self.left_pos = PositionPlot(fig.add_subplot(gs[0, 0]), state.scene.party.pos[current_player])
+        self.right_pos = PositionPlot(fig.add_subplot(gs[0, 2]), state.scene.party.pos[enemy_player])
+
+        def plot_party(state, player, grid_offset=0):
+            plots = {}
+            player_names = self.get_character_names(player)
+
+            # Top rows for character stats
+
+            plots['hitpoints'] = HistogramPlot(
+                fig.add_subplot(gs[0, 1 + grid_offset]),
+                state,
+                player,
+                data_key='hitpoints',
+                title='hitpoints',
+                xticklabels=list(str(range(HP_LOWER, HP_UPPER))),
+                character_names=player_names,
+            )
+            plots['armor_class'] = HistogramPlot(
+                fig.add_subplot(gs[1, 0 + grid_offset]),
+                state,
+                player,
+                data_key='armor_class',
+                title='armor_class',
+                xticklabels=list(str(range(AC_LOWER, AC_UPPER))),
+                character_names=player_names
+            )
+            plots['ability_modifier'] = HistogramPlot(
+                fig.add_subplot(gs[1, 1 + grid_offset]),
+                state,
+                player,
+                data_key='ability_modifier',
+                sum=True,
+                scale_min=ABILITY_MODIFIER_LOWER,
+                title='ability modifiers',
+                xticklabels=[c.name for c in Abilities],
+                character_names=player_names,
+                annotate_cells=True,
+            )
+            plots['action_resources'] = HistogramPlot(
+                fig.add_subplot(gs[2, 0 + grid_offset]),
+                state,
+                player,
+                data_key='action_resources',
+                sum=True,
+                title='action resources',
+                xticklabels=[c.name for c in ActionResourceType],
+                character_names=player_names,
+                annotate_cells=True,
+            )
+
+            plots['conditions'] = HistogramPlot(
+                fig.add_subplot(gs[2, 1 + grid_offset]),
+                state,
+                player,
+                data_key='conditions',
+                sum=True,
+                title='conditions',
+                xticklabels=[c.name for c in Conditions],
+                character_names=player_names,
+                annotate_cells=True,
+            )
+            return plots
+
+        self.left_plots = plot_party(state, current_player)
+        self.right_plots = plot_party(state, enemy_player, 2)
 
         # Bottom row for action grid, with each character in its own column
         action_axs = [fig.add_subplot(gs[3, i]) for i in range(N_CHARS)]

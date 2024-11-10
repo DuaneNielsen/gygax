@@ -1,20 +1,22 @@
+# public modules
+
 import jax
 import jax.numpy as jnp
-
+import jax.nn as nn
+from pgx.core import Array
 import pgx.core as core
+import chex
 
-import equipment.equipment
 from constants import *
 import constants
 import turn_tracker
-import chex
-from pgx.core import Array
 import dice
-from enum import IntEnum, auto
 from equipment.equipment import Equipment, EquipmentType
 import equipment.armor as armor
 import equipment.weapons as weapons
 from collections import namedtuple
+from bar import cum_bins
+from default_config import default_config
 
 """
 This simulation is deterministic.
@@ -103,6 +105,16 @@ class ActionArray:
     resource_requirement: chex.ArrayDevice
 
 
+@chex.dataclass
+class ObservationActionArray:
+    type: chex.ArrayDevice
+    damage: chex.ArrayDevice
+    damage_type: chex.ArrayDevice
+    legal_use_pos: chex.ArrayDevice
+    legal_target_pos: chex.ArrayDevice
+    resource_requirement: chex.ArrayDevice
+
+
 def init_actions():
     return ActionArray(
         type=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.int32),
@@ -111,6 +123,17 @@ def init_actions():
         legal_use_pos=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_CHARACTERS), dtype=jnp.bool),
         legal_target_pos=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS), dtype=jnp.bool),
         resource_requirement=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS), dtype=jnp.int32),
+    )
+
+
+def _observe_actions(actions: ActionArray):
+    return ObservationActionArray(
+        type=nn.one_hot(actions.type, N_ACTIONS),
+        damage=cum_bins(jnp.int32(actions.damage), DAMAGE_UPPER),
+        damage_type=nn.one_hot(actions.damage_type, N_DAMAGE_TYPES),
+        legal_use_pos=jnp.float32(actions.legal_use_pos),
+        legal_target_pos=jnp.float32(actions.legal_target_pos),
+        resource_requirement=jnp.float32(actions.resource_requirement),
     )
 
 
@@ -150,6 +173,19 @@ class Party:
     conditions: chex.ArrayDevice  # condition stacks
 
 
+@chex.dataclass
+class ObservationParty:
+    # pos: chex.ArrayDevice
+    hitpoints: chex.ArrayDevice  # hit points
+    armor_class: chex.ArrayDevice  # armor class
+    proficiency_bonus: chex.ArrayDevice  # proficiency bonus
+    ability_modifier: chex.ArrayDevice  # ability bonus for each stat
+    class_ability_bonus: chex.ArrayDevice  # class ability index 0: STR, 1: DEX, 2: CON,
+    actions: ActionArray  # the characters equipment
+    action_resources: chex.ArrayDevice  # number of actions remaining
+    conditions: chex.ArrayDevice  # condition stacks
+
+
 def init_party():
     return Party(
         pos=jnp.arange(N_CHARACTERS).repeat(N_PLAYERS).reshape(N_CHARACTERS, N_PLAYERS).T,
@@ -165,21 +201,35 @@ def init_party():
     )
 
 
+def _observe_party(party: Party):
+    return ObservationParty(
+        hitpoints=cum_bins(party.hitpoints, HP_UPPER, HP_LOWER),
+        armor_class=cum_bins(party.armor_class, AC_UPPER, AC_LOWER),
+        proficiency_bonus=cum_bins(party.proficiency_bonus, PROF_BONUS_UPPER, PROF_BONUS_LOWER),
+        ability_modifier=cum_bins(party.ability_modifier, ABILITY_MODIFIER_UPPER, ABILITY_MODIFIER_LOWER),
+        class_ability_bonus=nn.one_hot(party.class_ability_bonus_idx, N_ABILITIES),
+        conditions=cum_bins(party.conditions, CONDITION_STACKS_UPPER),
+        action_resources=cum_bins(party.action_resources, ACTION_RESOURCES_UPPER),
+        actions=_observe_actions(party.actions)
+    )
+
+
 @chex.dataclass
 class Scene:
     party: Party
     turn_tracker: turn_tracker.TurnTracker
 
 
-from default_config import default_config
+@chex.dataclass
+class Observation:
+    party: ObservationParty
 
 
 def ability_modifier(ability_score):
     return (ability_score - 10) // 2
 
 
-def init_scene(config=None):
-    config = config if config is not None else default_config
+def configure_party(config):
     party = init_party()
     party_config = config[ConfigItems.PARTY]
     for p in constants.Party:
@@ -221,7 +271,12 @@ def init_scene(config=None):
             item = convert_equipment(character_sheet[CharacterSheet.RANGED_WEAPON])
             party.actions = jax.tree.map(lambda x, y: x.at[P, C, Actions.ATTACK_RANGED_WEAPON].set(y), party.actions,
                                          item)
+    return party
 
+
+def init_scene(config=None):
+    config = config if config is not None else default_config
+    party = configure_party(config)
     dex_ability_bonus = party.ability_modifier[:, :, Abilities.DEX]
 
     return Scene(
@@ -237,8 +292,8 @@ from pgx._src.struct import dataclass
 class State:
     # dnd5e specific
     scene: Scene
+    observation: Observation
     legal_action_mask: Array = jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ACTIONS))
-    observation: Array = jnp.zeros((3, 3, 2), dtype=jnp.bool_)
     rewards: Array = jnp.float32([0.0, 0.0])
     terminated: Array = FALSE
     truncated: Array = FALSE
@@ -263,12 +318,22 @@ def _init(rng: jax.random.PRNGKey, config) -> State:
 
     return State(
         scene=scene,
+        observation=Observation(
+            party=_observe_party(scene.party)
+        ),
         legal_action_mask=legal_action_mask.ravel()
     )
 
 
 def _observe(state: State, player_id: Array) -> Array:
-    return state.observation
+    R_PLAYER = (jnp.arange(N_PLAYERS) + player_id) % 2
+    R_PLAYER = R_PLAYER[..., None]
+
+    # permute party positions to create egocentric view
+    party = jax.tree_map(lambda party: party[R_PLAYER, state.scene.party.pos], state.scene.party)
+    return Observation(
+        party=_observe_party(party)
+    )
 
 
 def _win_check(state):
@@ -308,8 +373,10 @@ def weapon_attack(state, action):
     action_resources = state.scene.party.action_resources
     has_attacks = action_resources[:, :, ActionResourceType.ATTACK, None] > 0
     weapon_attacked = (action.action == Actions.ATTACK_MELEE_WEAPON) | (action.action == Actions.ATTACK_RANGED_WEAPON)
-    consume_action = action_resources.at[*action.source, ActionResourceType.ACTION].set(action_resources[*action.source, ActionResourceType.ACTION] - 1)
-    consume_attack = action_resources.at[*action.source, ActionResourceType.ATTACK].set(action_resources[*action.source, ActionResourceType.ATTACK] - 1)
+    consume_action = action_resources.at[*action.source, ActionResourceType.ACTION].set(
+        action_resources[*action.source, ActionResourceType.ACTION] - 1)
+    consume_attack = action_resources.at[*action.source, ActionResourceType.ATTACK].set(
+        action_resources[*action.source, ActionResourceType.ATTACK] - 1)
     action_resources = jnp.where(weapon_attacked & has_attacks, consume_attack, action_resources)
     state.scene.party.action_resources = jnp.where(weapon_attacked & ~has_attacks, consume_action, action_resources)
     # todo: add bonus attacks here
@@ -317,15 +384,16 @@ def weapon_attack(state, action):
 
 
 def apply_death(state):
-    state.scene.party.conditions = state.scene.party.conditions.at[:, :, Conditions.DEAD].set((state.scene.party.hitpoints) <= 0 * 1)
+    state.scene.party.conditions = state.scene.party.conditions.at[:, :, Conditions.DEAD].set(
+        (state.scene.party.hitpoints) <= 0 * 1)
     dead_characters = state.scene.party.conditions[:, :, Conditions.DEAD] > 0
     zero_action_resources = jnp.zeros_like(state.scene.party.action_resources)
-    state.scene.party.action_resources = jnp.where(dead_characters[..., None], zero_action_resources, state.scene.party.action_resources)
+    state.scene.party.action_resources = jnp.where(dead_characters[..., None], zero_action_resources,
+                                                   state.scene.party.action_resources)
     return state
 
 
 def _step(state: State, action: Array) -> State:
-
     action = decode_action(action, state.current_player, state.scene.party.pos)
     jax.debug.print('action {} source {} {} target {} {}', action.action, *action.source, *action.target)
     state = end_turn(state, action)
