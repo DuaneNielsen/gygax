@@ -16,6 +16,11 @@ N_CHARS = 4
 TOTAL_TARGETS = 8  # 4 ally + 4 enemy slots
 
 
+def get_character_names(player):
+    names = list(default_config[ConfigItems.PARTY][player].keys())
+    return [names[p] for p in state.scene.party.pos[player]]
+
+
 class Plot(ABC):
     ax: axes
 
@@ -24,7 +29,8 @@ class Plot(ABC):
 
 
 class HistogramPlot(Plot):
-    def __init__(self, ax, state, player, data_key:str, title: str, xticklabels=None, character_names=None, annotate_cells=False, sum=False, scale_min=0):
+    def __init__(self, ax, state, player, data_key: str, title: str, xticklabels=None, character_names=None,
+                 annotate_cells=False, sum=False, scale_min=0):
         self.ax = ax
         self.sum = sum
         self.scale_min = scale_min
@@ -33,18 +39,27 @@ class HistogramPlot(Plot):
 
         data = self.data(state)
 
+        custom_cmap = sns.color_palette("Blues", as_cmap=True)
+        custom_cmap.set_under('white')
+
+        vmin = 0.001 if data.max() > 0 else 0
+        # Binary for regular cells, autoscale for sums
+        vmax = data.max() if sum else 1
+
         sns.heatmap(data, annot=annotate_cells, fmt='d',
                     xticklabels=xticklabels,
                     yticklabels=character_names,
-                    ax=ax, cmap='Reds',
-                    cbar_kws={'label': title})
+                    ax=ax, cmap=custom_cmap,
+                    cbar_kws={'label': title},
+                    cbar=False,
+                    vmin=vmin,
+                    vmax=vmax)
 
         ax.set_title(title)
-        # Rotate x-axis labels for better readability
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+        ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
 
     def data(self, state):
-
         """Plot conditions table"""
         data = jnp.int32(state.observation.party[self.data_key][self.player])
         if self.sum:
@@ -54,25 +69,22 @@ class HistogramPlot(Plot):
     def refresh(self, state):
         """Refresh conditions heatmap"""
         data = self.data(state)
+        character_names = get_character_names((state.current_player.item() + self.player) % 2)
 
-        # Update heatmap data
         heatmap = self.ax.collections[0]
-        heatmap.set_array(data.flatten())
 
-        # Update annotations
+        vmin = 0.001 if data.max() > 0 else 0
+        vmax = data.max() if self.sum else 1
+
+        heatmap.set_array(data.flatten())
+        heatmap.set_clim(vmin, vmax)
+
+        self.ax.set_yticklabels(character_names, rotation=0)
+
         for i, text in enumerate(self.ax.texts):
             row = i // data.shape[1]
             col = i % data.shape[1]
             text.set_text(f'{int(data[row, col])}')
-
-        # Update colorbar scale if needed
-        vmin, vmax = data.min(), data.max()
-        heatmap.set_clim(vmin, vmax)
-
-        # Update colorbar
-        cbar = self.ax.collections[0].colorbar
-        cbar.set_ticks(np.linspace(vmin, vmax, num=5))
-        cbar._draw_all()
 
 
 class PositionPlot(Plot):
@@ -177,7 +189,9 @@ class PartyVisualizer:
                         return  # Exit after processing the button click
 
     def refresh_action_grid(self, axs):
+        names = get_character_names(self.state.current_player.item())
         for char_idx, ax in enumerate(axs):
+            ax.set_title(names[char_idx])
             for j in range(TOTAL_TARGETS):
                 for i in range(N_ACTIONS):
                     button = self.callback_data['buttons'][char_idx][i][j]
@@ -207,7 +221,7 @@ class PartyVisualizer:
             plot.refresh(state)
 
     def create_grid(self, fig, char_idx, ax, legal_actions):
-        ax.set_title(f'Character {char_idx + 1}')
+        ax.set_title(get_character_names(0)[char_idx])
 
         n_rows = N_ACTIONS
         n_cols = TOTAL_TARGETS
@@ -250,10 +264,6 @@ class PartyVisualizer:
             ax.set_xticks([])
             ax.set_yticks([])
 
-    def get_character_names(self, player):
-        names = list(default_config[ConfigItems.PARTY][player].keys())
-        return [names[p] for p in state.scene.party.pos[player]]
-
     def visualize(self, state):
         """Create main visualization with character stats and action grid in one figure."""
         fig = plt.figure(figsize=(18, 15))
@@ -269,9 +279,7 @@ class PartyVisualizer:
 
         def plot_party(state, player, grid_offset=0):
             plots = {}
-            player_names = self.get_character_names(player)
-
-            # Top rows for character stats
+            player_names = get_character_names(player)
 
             plots['hitpoints'] = HistogramPlot(
                 fig.add_subplot(gs[0, 1 + grid_offset]),
@@ -279,7 +287,7 @@ class PartyVisualizer:
                 player,
                 data_key='hitpoints',
                 title='hitpoints',
-                xticklabels=list(str(range(HP_LOWER, HP_UPPER))),
+                xticklabels=list(range(HP_LOWER, HP_UPPER)),
                 character_names=player_names,
             )
             plots['armor_class'] = HistogramPlot(
@@ -288,7 +296,7 @@ class PartyVisualizer:
                 player,
                 data_key='armor_class',
                 title='armor_class',
-                xticklabels=list(str(range(AC_LOWER, AC_UPPER))),
+                xticklabels=list(range(AC_LOWER, AC_UPPER)),
                 character_names=player_names
             )
             plots['ability_modifier'] = HistogramPlot(
@@ -337,7 +345,7 @@ class PartyVisualizer:
         self.create_action_grid(fig, self.legal_action_mask, action_axs)
 
         # Manually adjust layout to make space for buttons and ensure proper alignment
-        plt.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.05, hspace=0.3, wspace=0.3)
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.05, hspace=0.5, wspace=0.3)
 
         self.callback_data['fig'] = fig
         return fig

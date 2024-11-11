@@ -102,7 +102,7 @@ class DamageType(IntEnum):
 N_DAMAGE_TYPES = len(DamageType)
 
 # scaling constants for observations
-HP_LOWER = -20  # we need this to handle death saves
+HP_LOWER = 0  # dont worry about negative hitpoints for now
 HP_UPPER = 20
 AC_LOWER = 0
 AC_UPPER = 20
