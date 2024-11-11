@@ -392,9 +392,15 @@ def test_vmap():
         [0, 1, 0, 0]
     ]))
 
-    # while ~jnp.all(state.terminated):
-    #     state = env.step(state, act_randomly(rng, state.legal_action_mask))
-    #     jax.debug.print('{}', state._board)
+    i = 0
+
+    while ~jnp.all(state.terminated):
+        rng, rng_policy = jax.random.split(rng)
+        state = step(state, act_randomly(rng_policy, state.legal_action_mask))
+        jax.debug.print('{}', state.terminated)
+        i += 1
+        if i > 10:
+            break
 
 
 def test_action_encode():

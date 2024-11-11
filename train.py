@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import optax
 from functools import partial
 from flax.training import train_state
-
+from pgx.experimental import act_randomly
 
 class MLP(nn.Module):
     features: Sequence[int]
@@ -77,37 +77,41 @@ if __name__ == '__main__':
     parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--dataset_size', type=int, default=8*10)
+    parser.add_argument('--dataset_size', type=int, default=10)
     args = parser.parse_args()
 
     # Initialize the model
     rng_key = jax.random.PRNGKey(0)
     rng_key, rng_env, rng_model = jax.random.split(rng_key, 3)
+    model = MLP(features=args.features)
+
+    # generate data
+    buffer = []
 
     env = dnd5e.DND5E()
     env_init, env_step = jax.vmap(env.init), jax.vmap(env.step)
-    state = env_init(jax.random.split(rng_env, args.dataset_size))
+    state = env_init(jax.random.split(rng_env, args.batch_size))
     observation = flatten_and_concat_dataclass(state.observation)
     target = target_signal(state)
+    buffer.append((observation, target))
 
-    leading_dims = args.dataset_size//args.batch_size, args.batch_size
+    for i in range(args.dataset_size):
+        rng_key, rng_policy = jax.random.split(rng_key)
+        state = env_step(state, act_randomly(rng_policy, state.legal_action_mask))
+        observation = flatten_and_concat_dataclass(state.observation)
+        target = target_signal(state)
+        buffer.append((observation, target))
 
-    observation = observation.reshape(*leading_dims, observation.shape[-1])
-    target = target.reshape(*leading_dims)
+    observation, target = zip(*buffer)
+    observation, target = jnp.stack(observation), jnp.stack(target)
 
-    print(observation.shape)
-    print(target.shape)
-
-    model = MLP(features=args.features)
+    # initialize training loop
     params = model.init(rng_model, observation)
     optimizer = optax.adam(args.learning_rate)
     tstate = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
 
-    params = model.init(rng_key, observation)
-
     # Forward pass
     output = model.apply(params, observation)
-    print(output.shape)
 
     for epoch in range(args.num_epochs):
         rng_key, rng_epoch = jax.random.split(rng_key)
