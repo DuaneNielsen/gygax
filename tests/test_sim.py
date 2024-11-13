@@ -418,8 +418,7 @@ def test_action_encode():
     assert jnp.all(action == dec_action.action)
     assert jnp.all(current_party == dec_action.source.party)
     assert jnp.all(source_character == dec_action.source.index)
-    assert jnp.all((
-                               target_party + current_party) % 2 == dec_action.target_slot.party)  # the target party switches depending upon the player
+    assert jnp.all((target_party + current_party) % 2 == dec_action.target_slot.party)  # the target party switches depending upon the player
     assert jnp.all(target_slot == dec_action.target_slot.slot)
     assert dec_action.target.index[0] == 2
     assert dec_action.target.index[1] == 1

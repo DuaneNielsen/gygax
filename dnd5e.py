@@ -15,7 +15,7 @@ from equipment.equipment import Equipment, EquipmentType
 import equipment.armor as armor
 import equipment.weapons as weapons
 from collections import namedtuple
-from bar import cum_bins
+from tree_serialization import cum_bins
 from default_config import default_config
 
 """
@@ -181,7 +181,7 @@ class ObservationParty:
     proficiency_bonus: chex.ArrayDevice  # proficiency bonus
     ability_modifier: chex.ArrayDevice  # ability bonus for each stat
     class_ability_bonus: chex.ArrayDevice  # class ability index 0: STR, 1: DEX, 2: CON,
-    actions: ActionArray  # the characters equipment
+    actions: ObservationActionArray  # the characters equipment
     action_resources: chex.ArrayDevice  # number of actions remaining
     conditions: chex.ArrayDevice  # condition stacks
 
@@ -397,11 +397,11 @@ def _step(state: State, action: Array) -> State:
     action = decode_action(action, state.current_player, state.scene.party.pos)
     jax.debug.print('action {} source {} {} target {} {}', action.action, *action.source, *action.target)
     state = end_turn(state, action)
-    jax.debug.print('on_turn_start {}', state.scene.turn_tracker.on_turn_start)
+    # jax.debug.print('on_turn_start {}', state.scene.turn_tracker.on_turn_start)
     state.scene.party.action_resources = jnp.where(state.scene.turn_tracker.on_turn_start,
                                                    state.scene.party.action_resources_start_turn,
                                                    state.scene.party.action_resources)
-    jax.debug.print('jimmy action_resources {}', state.scene.party.action_resources[0, 1])
+    # jax.debug.print('jimmy action_resources {}', state.scene.party.action_resources[0, 1])
 
     # actions that take effect on the turn start occur before this line
     state.scene.turn_tracker = turn_tracker.clear_events(state.scene.turn_tracker)

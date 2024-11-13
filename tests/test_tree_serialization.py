@@ -1,8 +1,12 @@
+from functools import partial
+
 import pytest
 import jax.numpy as jnp
+from jax import numpy as jnp
 from jax.numpy import array_equal
-from bar import cum_bins
-
+from tree_serialization import cum_bins, get_metadata, \
+    flatten_pytree_batched, unflatten_pytree_batched
+import jax
 
 def test_3d_input():
     # Create a 3D input array of shape (2, 3, 4)
@@ -97,3 +101,43 @@ def test_broadcasting():
     x = jnp.array([[1], [2], [3]])  # Shape (3, 1)
     result = cum_bins(x, lower_bound=0, upper_bound=10, num_bins=4)
     assert result.shape == (3, 1, 4)
+
+
+
+def test_vmapped_flatten_unflatten():
+    """Test the vmapped versions of flatten and unflatten operations"""
+    # Create a sample nested structure with batch dimension
+    batch_size = 3
+    sample_data = {
+        'a': jnp.ones((batch_size, 2, 3)),
+        'b': {
+            'c': jnp.zeros((batch_size, 4)),
+            'd': jnp.ones((batch_size, 2, 2))
+        }
+    }
+
+    # Get metadata (constant across batch)
+    metadata = get_metadata(sample_data)
+
+    # Create vmapped versions
+    vmap_flatten = jax.vmap(flatten_pytree_batched)
+    vmap_unflatten = jax.vmap(partial(unflatten_pytree_batched, metadata=metadata))
+
+    # Test flattening and unflattening
+    flat_arrays = vmap_flatten(sample_data)
+    reconstructed = vmap_unflatten(flat_arrays)
+
+    # Validate shape of flattened arrays
+    assert flat_arrays.shape == (batch_size, metadata.total_size), \
+        f"Expected shape {(batch_size, metadata.total_size)}, got {flat_arrays.shape}"
+
+    # Validate reconstruction
+    for orig_leaf, recon_leaf in zip(
+            jax.tree_util.tree_leaves(sample_data),
+            jax.tree_util.tree_leaves(reconstructed)
+    ):
+        assert jnp.array_equal(orig_leaf, recon_leaf), \
+            f"Mismatch: original {orig_leaf.shape} vs reconstructed {recon_leaf.shape}"
+
+    print("All tests passed!")
+    return flat_arrays, reconstructed
