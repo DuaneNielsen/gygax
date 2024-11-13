@@ -260,7 +260,7 @@ def configure_party(config):
 
             # end turn action
             party.actions.legal_use_pos = party.actions.legal_use_pos.at[:, :, Actions.END_TURN].set(True)
-            party.actions.legal_target_pos = party.actions.legal_target_pos.at[:, :, Actions.END_TURN, :, :].set(True)
+            party.actions.legal_target_pos = party.actions.legal_target_pos.at[:, :, Actions.END_TURN, 0, 0].set(True)
 
             # melee weapon
             item = convert_equipment(character_sheet[CharacterSheet.MAIN_HAND])
