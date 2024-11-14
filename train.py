@@ -22,16 +22,18 @@ from plots import LiveProbabilityPlot
 vmap_flatten = jax.vmap(flatten_pytree_batched)
 
 
-# class MLP(nn.Module):
-#     features: Sequence[int]
-#
-#     @nn.compact
-#     def __call__(self, x):
-#         for feat in self.features[:-1]:
-#             x = nn.Dense(feat)(x)
-#             x = nn.relu(x)
-#         x = nn.Dense(self.features[-1])(x)
-#         return x
+class MLP(nnx.Module):
+    def __init__(self, din:int, hidden:int, dout: int, rngs: nnx.Rngs):
+
+
+        self.linear_0 = nnx.Linear(din, hidden, rngs=rngs)
+        self.linear_1 = nnx.Linear(hidden, dout, rngs=rngs)
+
+    def __call__(self, x):
+        hidden = self.linear_0(x)
+        hidden = nnx.relu(hidden)
+        out = self.linear_1(hidden)
+        return out
 
 
 class Linear(nnx.Module):
@@ -142,14 +144,14 @@ if __name__ == '__main__':
     train_observation = jnp.stack(jnp.split(train_observation, train_observation.shape[0]//args.batch_size))
     train_target = jnp.stack(jnp.split(train_target, train_target.shape[0]//args.batch_size))
 
-    model = Linear(observation.shape[1], 1, nnx.Rngs(0))
+    model = MLP(observation.shape[1], 64, 1, rngs=nnx.Rngs(rng_model))
     optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
     pred = model(train_observation[0])
     assert pred.shape == train_target[0].shape
 
     # Create the plot
-    plot = LiveProbabilityPlot(num_probabilities=model.linear.kernel.value.shape[0])
-    plot.update(model.linear.kernel.value[:, 0])
+    # plot = LiveProbabilityPlot(num_probabilities=model.linear.kernel.value.shape[0])
+    # plot.update(model.linear.kernel.value[:, 0])
     # jax.debug.print('{}', dense_0)
     # time.sleep(0.1)
 
@@ -160,13 +162,13 @@ if __name__ == '__main__':
         for obs, target in zip(train_observation, train_target):
             loss = train_step(model, optimizer, obs, target)
             losses.append(loss.item())
-            plot.update(model.linear.kernel.value[:, 0])
+            # plot.update(model.linear.kernel.value[:, 0])
         print(f'loss {mean(losses)}')
 
     from math import prod
     test_prediction = model(test_observation)
     test_loss = jnp.mean((test_prediction - test_target) ** 2)
     jax.debug.print('{}', test_prediction.squeeze())
-    jax.debug.print('{}', test_target)
+    jax.debug.print('{}', test_target.squeeze())
 
     print(f"Final evaluation loss: {test_loss:.4f}")
