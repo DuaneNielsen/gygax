@@ -44,7 +44,7 @@ class Linear(nnx.Module):
 
 def target_signal(state):
     N, P, C, S = state.observation.party.hitpoints.shape
-    return jnp.sum(state.observation.party.hitpoints.reshape(N, P * C * S), -1)
+    return jnp.sum(state.observation.party.hitpoints.reshape(N, P * C * S), -1, keepdims=True)
 
 
 def generate_data(rng_key, batch_size, dataset_size):
@@ -55,7 +55,7 @@ def generate_data(rng_key, batch_size, dataset_size):
     # env_init, env_step = jax.vmap(env.init), jax.vmap(env.step)
     rng_key, rng_env = jax.random.split(rng_key)
     state = jax.vmap(env.init)(jax.random.split(rng_env, batch_size))
-    observation = vmap_flatten(state.observation.party.hitpoints)
+    observation = vmap_flatten(state.observation)
     target = target_signal(state)
     for observation, target in zip(observation, target):
         buffer.append((observation, target))
@@ -64,7 +64,7 @@ def generate_data(rng_key, batch_size, dataset_size):
         rng_key, rng_policy, rng_env = jax.random.split(rng_key, 3)
         keys = jax.random.split(rng_env, batch_size)
         state = jax.vmap(auto_reset(env.step, env.init))(state, act_randomly(rng_policy, state.legal_action_mask), keys)
-        observation = vmap_flatten(state.observation.party.hitpoints)
+        observation = vmap_flatten(state.observation)
         target = target_signal(state)
         for observation, target in zip(observation ,target):
            buffer.append((observation, target))
@@ -107,17 +107,16 @@ def train_step(model, optimizer, observation, target):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=40)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
-    parser.add_argument('--learning_rate', type=float, default=1e-1)
-    parser.add_argument('--num_epochs', type=int, default=600)
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--num_epochs', type=int, default=10)
     parser.add_argument('--dataset_size', type=int, default=100)
     args = parser.parse_args()
 
     # Initialize the model
     rng_key = jax.random.PRNGKey(0)
     rng_key, rng_model = jax.random.split(rng_key, 2)
-    # model = MLP(args.features)
 
     dataset_file = Path('buffer.pkl')
 
@@ -125,8 +124,7 @@ if __name__ == '__main__':
         with dataset_file.open('rb') as f:
             buffer = pickle.load(f)
     else:
-        # buffer = generate_data(rng_key, args.batch_size, args.dataset_size)
-        buffer = generate_synthetic_data()
+        buffer = generate_data(rng_key, args.batch_size, args.dataset_size)
         with dataset_file.open('wb') as f:
             pickle.dump(buffer, f)
 
@@ -145,7 +143,7 @@ if __name__ == '__main__':
     train_target = jnp.stack(jnp.split(train_target, train_target.shape[0]//args.batch_size))
 
     model = Linear(observation.shape[1], 1, nnx.Rngs(0))
-    optimizer = nnx.Optimizer(model, optax.sgd(args.learning_rate))
+    optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
     pred = model(train_observation[0])
     assert pred.shape == train_target[0].shape
 
