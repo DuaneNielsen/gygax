@@ -30,7 +30,7 @@ eg: to calculate damage from a melee attack, we multiply the hit probability by 
 This simplifies things a lot, and significantly reduces the amount of computation required
 
 It also allows us to use alphazero without needing to add "chance nodes" for stochastic alphazero,
-which would significantly complicate things 
+which would significantly increase the amount of resources required to traverse the game tree
 """
 
 # CharacterAction = namedtuple('Character', ['source_party', 'source_character', ])
@@ -393,6 +393,8 @@ def apply_death(state):
     return state
 
 
+
+
 def _step(state: State, action: Array) -> State:
     action = decode_action(action, state.current_player, state.scene.party.pos)
     jax.debug.print('action {} source {} {} target {} {}', action.action, *action.source, *action.target)
@@ -432,6 +434,8 @@ class DND5E(core.Env):
         super().__init__()
 
     def _init(self, key: jax.random.PRNGKey, config=None) -> State:
+        config = default_config if config is None else config
+        self.char_names = [list(config[ConfigItems.PARTY][party].keys()) for party in constants.Party]
         return _init(key, config)
 
     def _step(self, state: core.State, action: Array, key) -> State:

@@ -16,7 +16,7 @@ N_CHARS = 4
 TOTAL_TARGETS = 8  # 4 ally + 4 enemy slots
 
 
-def get_character_names(player):
+def get_character_names(state, player):
     names = list(default_config[ConfigItems.PARTY][player].keys())
     return [names[p] for p in state.scene.party.pos[player]]
 
@@ -69,7 +69,7 @@ class HistogramPlot(Plot):
     def refresh(self, state):
         """Refresh conditions heatmap"""
         data = self.data(state)
-        character_names = get_character_names((state.current_player.item() + self.player) % 2)
+        character_names = get_character_names(state, (state.current_player.item() + self.player) % 2)
 
         heatmap = self.ax.collections[0]
 
@@ -134,6 +134,7 @@ class PartyVisualizer:
             'fig': None,
             'legal_actions': None,
         }
+        self.fig = None
 
     @property
     def party(self):
@@ -189,7 +190,7 @@ class PartyVisualizer:
                         return  # Exit after processing the button click
 
     def refresh_action_grid(self, axs):
-        names = get_character_names(self.state.current_player.item())
+        names = get_character_names(self.state, self.state.current_player.item())
         for char_idx, ax in enumerate(axs):
             ax.set_title(names[char_idx])
             for j in range(TOTAL_TARGETS):
@@ -220,8 +221,10 @@ class PartyVisualizer:
         for key, plot in self.right_plots.items():
             plot.refresh(state)
 
+        plt.draw()
+
     def create_grid(self, fig, char_idx, ax, legal_actions):
-        ax.set_title(get_character_names(0)[char_idx])
+        ax.set_title(get_character_names(self.state, 0)[char_idx])
 
         n_rows = N_ACTIONS
         n_cols = TOTAL_TARGETS
@@ -266,23 +269,23 @@ class PartyVisualizer:
 
     def visualize(self, state):
         """Create main visualization with character stats and action grid in one figure."""
-        fig = plt.figure(figsize=(18, 15))
-        gs = gridspec.GridSpec(4, 4, figure=fig, height_ratios=[1, 1, 1, 1.5])
-        fig.suptitle(f'D&D 5e {self.party_name} State', size=16)
+        self.fig = plt.figure(figsize=(18, 15))
+        gs = gridspec.GridSpec(4, 4, figure=self.fig, height_ratios=[1, 1, 1, 1.5])
+        self.fig.suptitle(f'D&D 5e {self.party_name} State', size=16)
 
         party = state.observation.party
         current_player = state.current_player.item()
         enemy_player = (state.current_player.item() + 1) % 2
 
-        self.left_pos = PositionPlot(fig.add_subplot(gs[0, 0]), state.scene.party.pos[current_player])
-        self.right_pos = PositionPlot(fig.add_subplot(gs[0, 2]), state.scene.party.pos[enemy_player])
+        self.left_pos = PositionPlot(self.fig.add_subplot(gs[0, 0]), state.scene.party.pos[current_player])
+        self.right_pos = PositionPlot(self.fig.add_subplot(gs[0, 2]), state.scene.party.pos[enemy_player])
 
         def plot_party(state, player, grid_offset=0):
             plots = {}
-            player_names = get_character_names(player)
+            player_names = get_character_names(state, player)
 
             plots['hitpoints'] = HistogramPlot(
-                fig.add_subplot(gs[0, 1 + grid_offset]),
+                self.fig.add_subplot(gs[0, 1 + grid_offset]),
                 state,
                 player,
                 data_key='hitpoints',
@@ -291,7 +294,7 @@ class PartyVisualizer:
                 character_names=player_names,
             )
             plots['armor_class'] = HistogramPlot(
-                fig.add_subplot(gs[1, 0 + grid_offset]),
+                self.fig.add_subplot(gs[1, 0 + grid_offset]),
                 state,
                 player,
                 data_key='armor_class',
@@ -300,7 +303,7 @@ class PartyVisualizer:
                 character_names=player_names
             )
             plots['ability_modifier'] = HistogramPlot(
-                fig.add_subplot(gs[1, 1 + grid_offset]),
+                self.fig.add_subplot(gs[1, 1 + grid_offset]),
                 state,
                 player,
                 data_key='ability_modifier',
@@ -312,7 +315,7 @@ class PartyVisualizer:
                 annotate_cells=True,
             )
             plots['action_resources'] = HistogramPlot(
-                fig.add_subplot(gs[2, 0 + grid_offset]),
+                self.fig.add_subplot(gs[2, 0 + grid_offset]),
                 state,
                 player,
                 data_key='action_resources',
@@ -324,7 +327,7 @@ class PartyVisualizer:
             )
 
             plots['conditions'] = HistogramPlot(
-                fig.add_subplot(gs[2, 1 + grid_offset]),
+                self.fig.add_subplot(gs[2, 1 + grid_offset]),
                 state,
                 player,
                 data_key='conditions',
@@ -340,15 +343,15 @@ class PartyVisualizer:
         self.right_plots = plot_party(state, enemy_player, 2)
 
         # Bottom row for action grid, with each character in its own column
-        action_axs = [fig.add_subplot(gs[3, i]) for i in range(N_CHARS)]
+        action_axs = [self.fig.add_subplot(gs[3, i]) for i in range(N_CHARS)]
         self.callback_data['legal_actions'] = self.legal_action_mask
-        self.create_action_grid(fig, self.legal_action_mask, action_axs)
+        self.create_action_grid(self.fig, self.legal_action_mask, action_axs)
 
         # Manually adjust layout to make space for buttons and ensure proper alignment
         plt.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.05, hspace=0.5, wspace=0.3)
 
-        self.callback_data['fig'] = fig
-        return fig
+        self.callback_data['fig'] = self.fig
+        return self.fig
 
 
 if __name__ == '__main__':
