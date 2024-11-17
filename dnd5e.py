@@ -342,17 +342,22 @@ def _win_check(state):
 
 
 def end_turn(state, action):
-    jax.debug.print('state.scene.turn_tracker.characters_acting \n{}', state.scene.turn_tracker.characters_acting)
+    # jax.debug.print('state.scene.turn_tracker.characters_acting \n{}', state.scene.turn_tracker.characters_acting)
     state.scene.turn_tracker = turn_tracker.next_turn(state.scene.turn_tracker,
                                                       action.action == Actions.END_TURN,
                                                       action.source.party, action.source.index)
     return state
 
 
+def print_damage(amount, party, index):
+    target = char_names[party.item()][index.item()]
+    print(f'damage {amount.item()} {target}')
+
+
 def apply_damage(state: State, target: Character, damage: Damage):
     new_hp = state.scene.party.hitpoints[*target] - damage.amount
     state.scene.party.hitpoints = state.scene.party.hitpoints.at[*target].set(new_hp)
-    jax.debug.print('dam {} target_party{} target_char{}', damage.amount, target.party, target.index)
+    jax.debug.callback(print_damage, damage.amount, target.party, target.index)
     return state
 
 
@@ -392,12 +397,21 @@ def apply_death(state):
                                                    state.scene.party.action_resources)
     return state
 
+global char_names
 
+def print_action(action):
+    def name(char_names, character: Character):
+        return char_names[character.party.item()][character.index.item()]
+
+    global char_names
+    source = name(char_names, action.source)
+    target = name(char_names, action.target)
+    print(f'{source} {Actions(action.action).name} {target}')
 
 
 def _step(state: State, action: Array) -> State:
     action = decode_action(action, state.current_player, state.scene.party.pos)
-    jax.debug.print('action {} source {} {} target {} {}', action.action, *action.source, *action.target)
+    jax.debug.callback(print_action, action)
     state = end_turn(state, action)
     # jax.debug.print('on_turn_start {}', state.scene.turn_tracker.on_turn_start)
     state.scene.party.action_resources = jnp.where(state.scene.turn_tracker.on_turn_start,
@@ -435,7 +449,8 @@ class DND5E(core.Env):
 
     def _init(self, key: jax.random.PRNGKey, config=None) -> State:
         config = default_config if config is None else config
-        self.char_names = [list(config[ConfigItems.PARTY][party].keys()) for party in constants.Party]
+        global char_names
+        char_names = [list(config[ConfigItems.PARTY][party].keys()) for party in constants.Party]
         return _init(key, config)
 
     def _step(self, state: core.State, action: Array, key) -> State:
