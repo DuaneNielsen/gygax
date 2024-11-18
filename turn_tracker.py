@@ -31,11 +31,12 @@ the scheme for controlling the flow of initiative is
 @chex.dataclass
 class TurnTracker:
     initiative_scores: chex.ArrayDevice  # higher goes first
-    turn_order: chex.ArrayDevice # index array that sorts parties by initiative
-    end_turn: chex.ArrayDevice # if the end_turn button has been pressed
-    party: chex.ArrayDevice # current party
-    cohort: chex.ArrayDevice # which cohort in each party is current
-    turn: chex.ArrayDevice # which turn each party is on
+    turn_order: chex.ArrayDevice  # index array that sorts parties by initiative
+    end_turn: chex.ArrayDevice  # if the end_turn button has been pressed
+    party: chex.ArrayDevice  # current party
+    prev_party: chex.ArrayDevice
+    cohort: chex.ArrayDevice  # which cohort in each party is current
+    turn: chex.ArrayDevice  # which turn each party is on
     on_character_start: chex.ArrayDevice  # trigger for events that occur on start of character turn
     on_turn_start: chex.ArrayDevice
 
@@ -54,7 +55,8 @@ class TurnTracker:
         leading_dim = self.initiative_scores.shape[:-2]
         leading_range = [jnp.arange(n) for n in leading_dim]
         turn_mask = self.initiative_scores == self.initiative.reshape(leading_dim + (1, 1))
-        turn_mask = turn_mask.at[*leading_range, (self.party + 1) % N_PLAYERS].set(False)  # set non active party to false
+        turn_mask = turn_mask.at[*leading_range, (self.party + 1) % N_PLAYERS].set(
+            False)  # set non active party to false
         return turn_mask
 
 
@@ -63,12 +65,12 @@ def init(dex_ability_bonus):
     on_character_start = jnp.zeros_like(initiative_scores, dtype=jnp.bool)
     on_character_start = on_character_start.at[0].set(initiative_scores[0].max() == initiative_scores[0])
 
-
     return TurnTracker(
         initiative_scores=initiative_scores,
         turn_order=jnp.argsort(initiative_scores, axis=-1, descending=True),
         end_turn=jnp.zeros_like(initiative_scores, dtype=jnp.bool),
         party=jnp.zeros(1, dtype=jnp.int32),
+        prev_party=jnp.ones(1, dtype=jnp.int32), # start as if the previous party moved to trip discount reversal
         cohort=jnp.zeros(N_PLAYERS, dtype=jnp.int32),
         turn=jnp.zeros(N_PLAYERS, dtype=jnp.int32),
         on_character_start=on_character_start,
@@ -95,6 +97,9 @@ def _next_cohort(turn_tracker, actions_remain: Array):
 
 def next_turn(turn_tracker, end_turn, end_turn_party, end_turn_character):
 
+    # keep track of the previous party so we cna tell when it changes, (required for discount calculation)
+    turn_tracker.prev_party = turn_tracker.party.copy()
+
     # if all characters ended turn, reset the counter and set on_turn_start
     turn_tracker.end_turn = turn_tracker.end_turn.at[end_turn_party, end_turn_character].set(jnp.bool(end_turn))
 
@@ -116,10 +121,12 @@ def next_turn(turn_tracker, end_turn, end_turn_party, end_turn_character):
 
     # if all characters ended turn, start the new turn
     turn_tracker.on_turn_start = jnp.all(turn_tracker.end_turn)
-    turn_tracker.end_turn = jnp.where(jnp.all(turn_tracker.end_turn), jnp.zeros_like(turn_tracker.end_turn), turn_tracker.end_turn)
+    turn_tracker.end_turn = jnp.where(jnp.all(turn_tracker.end_turn), jnp.zeros_like(turn_tracker.end_turn),
+                                      turn_tracker.end_turn)
 
     # set the on_character_start for characters that just became active
-    turn_tracker.on_character_start = jnp.where(actions_remain, turn_tracker.on_character_start, turn_tracker.characters_acting)
+    turn_tracker.on_character_start = jnp.where(actions_remain, turn_tracker.on_character_start,
+                                                turn_tracker.characters_acting)
 
     return turn_tracker
 
