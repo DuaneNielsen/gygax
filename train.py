@@ -20,6 +20,11 @@ import numpy as onp
 from play import PartyVisualizer
 import pgx
 import mctx
+from typing import NamedTuple
+from mctx._src.tree import SearchSummary
+
+devices = jax.local_devices()
+num_devices = len(devices)
 
 vmap_flatten = jax.vmap(flatten_pytree_batched)
 
@@ -77,7 +82,8 @@ def get_recurrent_function(env):
 
         # negate the discount when control passes to the opposing party
         tt = state.scene.turn_tracker
-        discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1), -1.0 * jnp.ones_like(value), jnp.ones_like(value))
+        discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1), -1.0 * jnp.ones_like(value),
+                             jnp.ones_like(value))
         discount = jnp.where(state.terminated, 0.0, discount)
 
         recurrent_fn_output = mctx.RecurrentFnOutput(
@@ -91,6 +97,16 @@ def get_recurrent_function(env):
     return recurrent_fn
 
 
+class SelfplayOutput(NamedTuple):
+    state: dnd5e.State
+    obs: jnp.ndarray
+    reward: jnp.ndarray
+    terminated: jnp.ndarray
+    action_weights: jnp.ndarray
+    discount: jnp.ndarray
+    search_tree_summary: SearchSummary
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--batch_size', type=int, default=2)
@@ -98,10 +114,14 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--dataset_size', type=int, default=100)
+    parser.add_argument('--selfplay_batch_size', type=int, default=2)
+    parser.add_argument('--num_simulations', type=int, default=40)
+    parser.add_argument('--selfplay_max_steps', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
 
     # Initialize the random keys
-    rng_key = jax.random.PRNGKey(0)
+    rng_key = jax.random.PRNGKey(args.seed)
     rng_key, rng_model, rng_env, rng_policy, rng_search = jax.random.split(rng_key, 5)
     env = dnd5e.DND5E()
     recurrent_fn = get_recurrent_function(env)
@@ -111,30 +131,71 @@ if __name__ == '__main__':
     observation = vmap_flatten(state.observation)
     model = MLP(observation.shape[1], 128, num_actions, rngs=nnx.Rngs(rng_model))
 
-    logits, value = jax.vmap(model)(observation)
-    logits = logits - jnp.max(logits, axis=-1, keepdims=True)
-    logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
+    #
+    # logits, value = jax.vmap(model)(observation)
+    # logits = logits - jnp.max(logits, axis=-1, keepdims=True)
+    # logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
 
-    root = mctx.RootFnOutput(prior_logits=logits, value=value.squeeze(-1), embedding=state)
+    # root = mctx.RootFnOutput(prior_logits=logits, value=value.squeeze(-1), embedding=state)
+
+    state_axes = nnx.StateAxes({...: None})
+    @nnx.pmap(in_axes=(state_axes, 0), out_axes=0, devices=jax.devices())
+    def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
+        batch_size = args.selfplay_batch_size // num_devices
+
+        def step_fn(state, rng_key) -> SelfplayOutput:
+            rng_key, rng_search, rng_env = jax.random.split(rng_key, 3)
+            observation = vmap_flatten(state.observation)
+
+            logits, value = model(observation)
+            value = value.squeeze(-1)
+            root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
+
+            policy_output = mctx.gumbel_muzero_policy(
+                params=model,
+                rng_key=rng_search,
+                root=root,
+                recurrent_fn=nnx.jit(recurrent_fn),
+                num_simulations=args.num_simulations,
+                invalid_actions=~state.legal_action_mask,
+                qtransform=mctx.qtransform_completed_by_mix_value,
+                gumbel_scale=1.0,
+            )
+
+            # step the environment
+            action = jnp.argmax(policy_output.action_weights, -1)
+            env_keys = jax.random.split(rng_env, batch_size)
+            state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, action, env_keys)
+
+            # calc reward and discount
+            current_player = state.current_player
+            tt = state.scene.turn_tracker
+            reward = state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
+            discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1),
+                                 -1.0 * jnp.ones_like(value),
+                                 jnp.ones_like(value))
+            discount = jnp.where(state.terminated, 0.0, discount)
+
+            # return the search stats so we can track them
+            search_tree_summary = policy_output.search_tree.summary()
+            return state, SelfplayOutput(
+                state=state,
+                obs=observation,
+                action_weights=policy_output.action_weights,
+                reward=reward,
+                terminated=state.terminated,
+                discount=discount,
+                search_tree_summary=search_tree_summary,
+            )
+
+        # init the env and generate a batch of trajectories
+        rng_key, rng_env_init = jax.random.split(rng_key, 2)
+        state = jax.jit(jax.vmap(env.init))(jax.random.split(rng_env_init, batch_size))
+        key_seq = jax.random.split(rng_key, args.selfplay_max_steps)
+        _, data = jax.lax.scan(jax.jit(step_fn), state, key_seq)
+
+        return data
 
 
-    def root_action_selection_fn(rng_key, tree, node_index):
-        action = act_randomly(rng_key, tree.embeddings.legal_action_mask[node_index])
-        jax.debug.print('{}', action)
-        return action
-
-
-    def interior_action_selection_fn(rng_key, tree, node_index, depth):
-        action = act_randomly(rng_key, tree.embeddings.legal_action_mask[node_index])
-        jax.debug.print('{}', action)
-        return action
-
-
-    search_tree = mctx.search(params=model,
-                              rng_key=rng_search,
-                              root=root,
-                              recurrent_fn=recurrent_fn,
-                              root_action_selection_fn=root_action_selection_fn,
-                              interior_action_selection_fn=interior_action_selection_fn,
-                              num_simulations=20,
-                              )
+    rng_selfplay_devices = jax.random.split(rng_search, num_devices)
+    data = selfplay(model, rng_selfplay_devices)
