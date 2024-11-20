@@ -95,7 +95,6 @@ def make_tree(env, rng_key, selfplay_batch_size, selfplay_num_simulations):
     )
 
     return policy_output
-
 if __name__ == '__main__':
 
     parser = ArgumentParser()

@@ -140,7 +140,7 @@ def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_sim
             state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, action, env_keys)
 
             # calc reward and discount
-            current_player = state.current_player
+            current_player = state.current_player.squeeze(-1)
             tt = state.scene.turn_tracker
             reward = state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
             discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1),
@@ -171,6 +171,41 @@ def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_sim
     return selfplay
 
 
+class Sample(NamedTuple):
+    obs: jnp.ndarray
+    policy_tgt: jnp.ndarray
+    value_tgt: jnp.ndarray
+    mask: jnp.ndarray
+
+
+@partial(jax.pmap, static_broadcasted_argnums=(1, 2))
+def compute_loss_input(data: SelfplayOutput, selfplay_batch_size, selfplay_max_num_steps) -> Sample:
+    batch_size = selfplay_batch_size // num_devices
+    # If episode is truncated, there is no value target
+    # So when we compute value loss, we need to mask it
+    value_mask = jnp.cumsum(data.terminated[::-1, :], axis=0)[::-1, :] >= 1
+
+    # Compute value target
+    def body_fn(carry, i):
+        ix = selfplay_max_num_steps - i - 1
+        v = data.reward[ix] + data.discount[ix] * carry
+        return v, v
+
+    _, value_tgt = jax.lax.scan(
+        body_fn,
+        jnp.zeros(batch_size),
+        jnp.arange(selfplay_max_num_steps),
+    )
+    value_tgt = value_tgt[::-1, :]
+
+    return Sample(
+        obs=data.obs,
+        policy_tgt=data.action_weights,
+        value_tgt=value_tgt,
+        mask=value_mask,
+    )
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--batch_size', type=int, default=2)
@@ -182,19 +217,44 @@ if __name__ == '__main__':
     parser.add_argument('--selfplay_num_simulations', type=int, default=64)
     parser.add_argument('--selfplay_max_steps', type=int, default=10)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--training_batch_size', type=int, default=8)
     args = parser.parse_args()
 
-    # Initialize the random keys
+    # monitoring
+    frames = 0
+
+    # random keys
     rng_key = jax.random.PRNGKey(args.seed)
     rng_key, rng_model, rng_env, rng_policy, rng_search = jax.random.split(rng_key, 5)
+
+    # environment
     env = dnd5e.DND5E()
 
+    # setup model
     state = env.init(rng_env)
     observation_features = flatten_pytree_batched(state.observation).shape[0]
     model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+    optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
 
+    # selfplay
     selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
     rng_selfplay_devices = jax.random.split(rng_search, num_devices)
     data = selfplay(model, rng_selfplay_devices)
 
+    # load and shuffle the batch
+    samples = compute_loss_input(data, args.selfplay_batch_size, args.selfplay_max_steps)
+    # samples > (#devices, batch, max_num_steps, ...)
+    samples = jax.device_get(samples) # read into host memory
+    samples = jax.tree_util.tree_map(lambda x: x.reshape((-1, *x.shape[3:])), samples)
+    rng_key, rng_batch = jax.random.split(rng_key)
+    ixs = jax.random.permutation(rng_batch, jnp.arange(samples.obs.shape[0]))
+    samples = jax.tree_util.tree_map(lambda x: x[ixs], samples)
+    num_updates = samples.obs.shape[0] // args.training_batch_size
+    minibatches = jax.tree_util.tree_map(
+        lambda x: x.reshape((num_updates, num_devices, -1) + x.shape[1:]), samples
+    )
 
+    # train the network
+    for i in range(num_updates):
+        minibatch: Sample = jax.tree_util.tree_map(lambda x: x[i], minibatches)
+        loss = train_step(model, optimizer, minibatch.obs, minibatch.policy_tgt, minibatch.value_tgt)
