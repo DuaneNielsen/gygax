@@ -46,6 +46,8 @@ characters = {
 }
 
 
+
+
 def test_sim():
     env = dnd5e.DND5E()
     rng, rng_init = jax.random.split(jax.random.PRNGKey(0), 2)
@@ -667,3 +669,12 @@ def test_win_check(state):
     game_over, winner = dnd5e._win_check(state)
     assert game_over == True
     assert winner == 0
+
+
+def test_reward_wrapper():
+    env = dnd5e.DND5E()
+    env = dnd5e.wrap_reward_on_hitbar_percentage(env)
+    state = env.init(jax.random.PRNGKey(0))
+    action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 3)
+    state = env.step(state, action)
+    assert jnp.all(jnp.abs(state.rewards - jnp.array([0.0673077, 0.], dtype=jnp.float32)) < 0.000001)

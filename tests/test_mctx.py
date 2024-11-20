@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from train import vmap_flatten, MLP, get_recurrent_function
+from train import vmap_flatten, MLP, get_recurrent_function, make_selfplay
 import dnd5e
 from flax import nnx
 import mctx
@@ -71,3 +71,20 @@ def test_random_search():
                               interior_action_selection_fn=interior_action_selection_fn,
                               num_simulations=20,
                               )
+
+def test_selfplay_closure():
+    batch_size = 2
+    selfplay_batch_size = 2
+    selfplay_max_steps = 10
+    selfplay_num_simulations = 20
+    num_devices = len(jax.local_devices())
+    rng_env, rng_model, rng_search = jax.random.split(jax.random.PRNGKey(0), 3)
+    env = dnd5e.DND5E()
+    state = jax.vmap(env.init)(jax.random.split(rng_env, batch_size))
+    observation = vmap_flatten(state.observation)
+    model = MLP(observation.shape[1], 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+    selfplay = make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_simulations)
+
+    rng_selfplay_devices = jax.random.split(rng_search, num_devices)
+    data = selfplay(model, rng_selfplay_devices)
+

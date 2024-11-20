@@ -17,6 +17,7 @@ import equipment.weapons as weapons
 from collections import namedtuple
 from tree_serialization import cum_bins
 from default_config import default_config
+from wrappers import DND5EProxy
 
 """
 This simulation is deterministic.
@@ -163,6 +164,7 @@ def convert_equipment(item: Equipment):
 class Party:
     pos: chex.ArrayDevice
     hitpoints: chex.ArrayDevice  # hit points
+    hitpoints_max: chex.ArrayDevice # characters max hitpoints
     armor_class: chex.ArrayDevice  # armor class
     proficiency_bonus: chex.ArrayDevice  # proficiency bonus
     ability_modifier: chex.ArrayDevice  # ability bonus for each stat
@@ -190,6 +192,7 @@ def init_party():
     return Party(
         pos=jnp.arange(N_CHARACTERS).repeat(N_PLAYERS).reshape(N_CHARACTERS, N_PLAYERS).T,
         hitpoints=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.float32),
+        hitpoints_max=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.float32),
         armor_class=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32),
         proficiency_bonus=jnp.zeros((N_PLAYERS, N_CHARACTERS), dtype=jnp.int32),  # proficiency bonus
         ability_modifier=jnp.zeros((N_PLAYERS, N_CHARACTERS, N_ABILITIES), dtype=jnp.int32),
@@ -243,6 +246,7 @@ def configure_party(config):
                     ability_modifier(ability_score))
 
             party.hitpoints = party.hitpoints.at[P, C].set(character_sheet[CharacterSheet.HITPOINTS])
+            party.hitpoints_max = party.hitpoints.at[P, C].set(character_sheet[CharacterSheet.HITPOINTS])
 
             # action resources
             party.action_resources_start_turn = party.action_resources_start_turn.at[
@@ -399,14 +403,19 @@ def apply_death(state):
 
 global char_names
 
-def print_action(action):
+
+def repr_action(action : ActionTuple):
     def name(char_names, character: Character):
         return char_names[character.party.item()][character.index.item()]
 
     global char_names
     source = name(char_names, action.source)
     target = name(char_names, action.target)
-    print(f'{source} {Actions(action.action).name} {target}')
+    return f'{source} {Actions(action.action).name} {target}'
+
+
+def print_action(action):
+    print(repr_action(action))
 
 
 def _step(state: State, action: Array) -> State:
@@ -473,3 +482,22 @@ class DND5E(core.Env):
     @property
     def num_players(self) -> int:
         return 2
+
+
+"""
+wrappers below here
+"""
+
+def wrap_reward_on_hitbar_percentage(env):
+    def new_step(parent_env, state, action, key):
+        prev_state = jax.tree.map(lambda s: s.copy(), state)
+        next_state = parent_env.step(state, action, key)
+        prev_hp = jnp.clip(prev_state.scene.party.hitpoints, min=0)
+        next_hp = jnp.clip(next_state.scene.party.hitpoints, min=0)
+        reward = prev_hp - next_hp
+        reward /= prev_state.scene.party.hitpoints_max
+        reward = reward.sum(-1) / N_CHARACTERS
+        reward = reward[(jnp.arange(N_PLAYERS) + 1) % 2]
+        return next_state.replace(rewards=reward)
+
+    return DND5EProxy(env, step_wrapper=new_step)

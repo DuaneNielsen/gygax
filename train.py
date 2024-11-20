@@ -107,41 +107,13 @@ class SelfplayOutput(NamedTuple):
     search_tree_summary: SearchSummary
 
 
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--dataset_size', type=int, default=100)
-    parser.add_argument('--selfplay_batch_size', type=int, default=2)
-    parser.add_argument('--num_simulations', type=int, default=40)
-    parser.add_argument('--selfplay_max_steps', type=int, default=10)
-    parser.add_argument('--seed', type=int, default=0)
-    args = parser.parse_args()
-
-    # Initialize the random keys
-    rng_key = jax.random.PRNGKey(args.seed)
-    rng_key, rng_model, rng_env, rng_policy, rng_search = jax.random.split(rng_key, 5)
-    env = dnd5e.DND5E()
-    recurrent_fn = get_recurrent_function(env)
-    num_actions = env.num_actions
-
-    state = jax.vmap(env.init)(jax.random.split(rng_env, args.batch_size))
-    observation = vmap_flatten(state.observation)
-    model = MLP(observation.shape[1], 128, num_actions, rngs=nnx.Rngs(rng_model))
-
-    #
-    # logits, value = jax.vmap(model)(observation)
-    # logits = logits - jnp.max(logits, axis=-1, keepdims=True)
-    # logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
-
-    # root = mctx.RootFnOutput(prior_logits=logits, value=value.squeeze(-1), embedding=state)
-
+def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_simulations):
     state_axes = nnx.StateAxes({...: None})
+
     @nnx.pmap(in_axes=(state_axes, 0), out_axes=0, devices=jax.devices())
     def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
-        batch_size = args.selfplay_batch_size // num_devices
+        batch_size = selfplay_batch_size // num_devices
+        recurrent_fn = get_recurrent_function(env)
 
         def step_fn(state, rng_key) -> SelfplayOutput:
             rng_key, rng_search, rng_env = jax.random.split(rng_key, 3)
@@ -156,7 +128,7 @@ if __name__ == '__main__':
                 rng_key=rng_search,
                 root=root,
                 recurrent_fn=nnx.jit(recurrent_fn),
-                num_simulations=args.num_simulations,
+                num_simulations=selfplay_num_simulations,
                 invalid_actions=~state.legal_action_mask,
                 qtransform=mctx.qtransform_completed_by_mix_value,
                 gumbel_scale=1.0,
@@ -190,12 +162,39 @@ if __name__ == '__main__':
 
         # init the env and generate a batch of trajectories
         rng_key, rng_env_init = jax.random.split(rng_key, 2)
-        state = jax.jit(jax.vmap(env.init))(jax.random.split(rng_env_init, batch_size))
-        key_seq = jax.random.split(rng_key, args.selfplay_max_steps)
+        state = jax.jit(jax.vmap(env.init))(jax.random.split(rng_env_init, selfplay_batch_size))
+        key_seq = jax.random.split(rng_key, selfplay_max_steps)
         _, data = jax.lax.scan(jax.jit(step_fn), state, key_seq)
 
         return data
 
+    return selfplay
 
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--num_epochs', type=int, default=100)
+    parser.add_argument('--dataset_size', type=int, default=100)
+    parser.add_argument('--selfplay_batch_size', type=int, default=2)
+    parser.add_argument('--selfplay_num_simulations', type=int, default=64)
+    parser.add_argument('--selfplay_max_steps', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=0)
+    args = parser.parse_args()
+
+    # Initialize the random keys
+    rng_key = jax.random.PRNGKey(args.seed)
+    rng_key, rng_model, rng_env, rng_policy, rng_search = jax.random.split(rng_key, 5)
+    env = dnd5e.DND5E()
+
+    state = env.init(rng_env)
+    observation_features = flatten_pytree_batched(state.observation).shape[0]
+    model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+
+    selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
     rng_selfplay_devices = jax.random.split(rng_search, num_devices)
     data = selfplay(model, rng_selfplay_devices)
+
+
