@@ -361,7 +361,8 @@ def print_damage(amount, party, index):
 def apply_damage(state: State, target: Character, damage: Damage):
     new_hp = state.scene.party.hitpoints[*target] - damage.amount
     state.scene.party.hitpoints = state.scene.party.hitpoints.at[*target].set(new_hp)
-    jax.debug.callback(print_damage, damage.amount, target.party, target.index)
+    if debug:
+        jax.debug.callback(print_damage, damage.amount, target.party, target.index)
     return state
 
 
@@ -417,10 +418,13 @@ def repr_action(action : ActionTuple):
 def print_action(action):
     print(repr_action(action))
 
+debug = False
+
 
 def _step(state: State, action: Array) -> State:
     action = decode_action(action, state.current_player, state.scene.party.pos)
-    jax.debug.callback(print_action, action)
+    if debug:
+        jax.debug.callback(print_action, action)
     state = end_turn(state, action)
     # jax.debug.print('on_turn_start {}', state.scene.turn_tracker.on_turn_start)
     state.scene.party.action_resources = jnp.where(state.scene.turn_tracker.on_turn_start,

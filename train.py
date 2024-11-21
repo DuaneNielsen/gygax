@@ -6,22 +6,22 @@ from typing import Sequence, List
 import jax
 import jax.numpy as jnp
 import dnd5e
-from dataclasses import dataclass
 import optax
 from pgx.experimental import act_randomly, auto_reset
-from random import shuffle
 import pickle
 from pathlib import Path
 from functools import partial
 from tree_serialization import flatten_pytree_batched
 from plots import LiveProbabilityPlot
 from constants import Actions, N_ACTIONS, N_CHARACTERS, N_PLAYERS
-import numpy as onp
 from play import PartyVisualizer
 import pgx
 import mctx
 from typing import NamedTuple
 from mctx._src.tree import SearchSummary
+import orbax.checkpoint as ocp
+import tqdm
+import wandb
 
 devices = jax.local_devices()
 num_devices = len(devices)
@@ -135,9 +135,9 @@ def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_sim
             )
 
             # step the environment
-            action = jnp.argmax(policy_output.action_weights, -1)
+            # jax.debug.print('illegal actions {}', state.legal_action_mask[jnp.arange(256), ~policy_output.action].sum())
             env_keys = jax.random.split(rng_env, batch_size)
-            state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, action, env_keys)
+            state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, policy_output.action, env_keys)
 
             # calc reward and discount
             current_player = state.current_player.squeeze(-1)
@@ -212,16 +212,13 @@ if __name__ == '__main__':
     parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--dataset_size', type=int, default=100)
-    parser.add_argument('--selfplay_batch_size', type=int, default=2)
+    parser.add_argument('--selfplay_batch_size', type=int, default=256)
     parser.add_argument('--selfplay_num_simulations', type=int, default=64)
     parser.add_argument('--selfplay_max_steps', type=int, default=10)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--training_batch_size', type=int, default=8)
     args = parser.parse_args()
 
-    # monitoring
-    frames = 0
 
     # random keys
     rng_key = jax.random.PRNGKey(args.seed)
@@ -229,6 +226,7 @@ if __name__ == '__main__':
 
     # environment
     env = dnd5e.DND5E()
+    env = dnd5e.wrap_reward_on_hitbar_percentage(env)
 
     # setup model
     state = env.init(rng_env)
@@ -236,25 +234,43 @@ if __name__ == '__main__':
     model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
     optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
 
-    # selfplay
-    selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
-    rng_selfplay_devices = jax.random.split(rng_search, num_devices)
-    data = selfplay(model, rng_selfplay_devices)
+    # monitoring
+    wandb.init(project=f'alphazero-dnd5e', config=args.__dict__, settings=wandb.Settings(code_dir="."))
+    frames = 0
 
-    # load and shuffle the batch
-    samples = compute_loss_input(data, args.selfplay_batch_size, args.selfplay_max_steps)
-    # samples > (#devices, batch, max_num_steps, ...)
-    samples = jax.device_get(samples) # read into host memory
-    samples = jax.tree_util.tree_map(lambda x: x.reshape((-1, *x.shape[3:])), samples)
-    rng_key, rng_batch = jax.random.split(rng_key)
-    ixs = jax.random.permutation(rng_batch, jnp.arange(samples.obs.shape[0]))
-    samples = jax.tree_util.tree_map(lambda x: x[ixs], samples)
-    num_updates = samples.obs.shape[0] // args.training_batch_size
-    minibatches = jax.tree_util.tree_map(
-        lambda x: x.reshape((num_updates, num_devices, -1) + x.shape[1:]), samples
-    )
+    for epoch in tqdm.trange(args.num_epochs):
+        # selfplay
+        selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
+        rng_selfplay_devices = jax.random.split(rng_search, num_devices)
+        data = selfplay(model, rng_selfplay_devices)
+        # samples > (#devices, batch, max_num_steps, ...)
+        samples = compute_loss_input(data, args.selfplay_batch_size, args.selfplay_max_steps)
 
-    # train the network
-    for i in range(num_updates):
-        minibatch: Sample = jax.tree_util.tree_map(lambda x: x[i], minibatches)
-        loss = train_step(model, optimizer, minibatch.obs, minibatch.policy_tgt, minibatch.value_tgt)
+        # load and shuffle the batch
+        samples = jax.device_get(samples) # read into host memory
+        samples = jax.tree_util.tree_map(lambda x: x.reshape((-1, *x.shape[3:])), samples)
+        rng_key, rng_batch = jax.random.split(rng_key)
+        ixs = jax.random.permutation(rng_batch, jnp.arange(samples.obs.shape[0]))
+        samples = jax.tree_util.tree_map(lambda x: x[ixs], samples)
+        num_updates = samples.obs.shape[0] // args.training_batch_size
+        minibatches = jax.tree_util.tree_map(
+            lambda x: x.reshape((num_updates, num_devices, -1) + x.shape[1:]), samples
+        )
+
+        # train the network
+        loss = jnp.array([0])
+        for i in range(num_updates):
+            minibatch: Sample = jax.tree_util.tree_map(lambda x: x[i], minibatches)
+            batch_loss = train_step(model, optimizer, minibatch.obs, minibatch.policy_tgt, minibatch.value_tgt)
+            loss = batch_loss * 0.5 + loss * 0.5
+
+        wandb.log({'loss': loss.item()})
+
+        # checkpoint
+        _, state = nnx.split(model)
+        checkpointer = ocp.StandardCheckpointer()
+        checkpoint_path = Path(f'{wandb.run.dir}').absolute() / f'state_epoch{epoch:3d}'
+        checkpointer.save(checkpoint_path, state)
+        latest_dir = Path(f'{wandb.run.dir}').absolute() / f'latest'
+        latest_dir.unlink(missing_ok=True)
+        latest_dir.symlink_to(checkpoint_path)

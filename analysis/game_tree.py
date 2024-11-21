@@ -9,7 +9,8 @@ from argparse import ArgumentParser
 from train import MLP, get_recurrent_function, vmap_flatten
 from tree_serialization import flatten_pytree_batched
 from flax import nnx
-
+import orbax.checkpoint as ocp
+from pathlib import Path
 
 def convert_tree_to_graph(
         tree: mctx.Tree,
@@ -107,15 +108,24 @@ if __name__ == '__main__':
 
     rng_key = jax.random.PRNGKey(args.seed)
     rng_key, rng_model, rng_env = jax.random.split(rng_key, 3)
-    env = dnd5e.DND5E()
 
+    print('loading env')
+    env = dnd5e.DND5E()
+    env = dnd5e.wrap_reward_on_hitbar_percentage(env)
+
+    print('loading network')
     state = env.init(rng_env)
     observation_features = flatten_pytree_batched(state.observation).shape[0]
     model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+    abstract_model = nnx.eval_shape(lambda: model)
+    graphdef, abstract_state = nnx.split(abstract_model)
+    checkpointer = ocp.StandardCheckpointer()
+    state_restored = checkpointer.restore(Path('../wandb/latest-run/files/latest').absolute(), abstract_state)
+    model = nnx.merge(graphdef, state_restored)
 
-    env = dnd5e.wrap_reward_on_hitbar_percentage(env)
-
+    print('making tree')
     policy_output = make_tree(env, rng_key, args.selfplay_batch_size, args.selfplay_num_simulations)
 
+    print('writing graph image')
     graph = convert_tree_to_graph(policy_output.search_tree)
     graph.draw("search_tree.png", prog="dot")
