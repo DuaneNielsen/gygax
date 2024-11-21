@@ -1,0 +1,9 @@
+jax
+mctx
+optax
+flax
+tqdm
+pgx
+matplotlib
+orbax-checkpoint
+wandb
