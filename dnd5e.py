@@ -164,7 +164,7 @@ def convert_equipment(item: Equipment):
 class Party:
     pos: chex.ArrayDevice
     hitpoints: chex.ArrayDevice  # hit points
-    hitpoints_max: chex.ArrayDevice # characters max hitpoints
+    hitpoints_max: chex.ArrayDevice  # characters max hitpoints
     armor_class: chex.ArrayDevice  # armor class
     proficiency_bonus: chex.ArrayDevice  # proficiency bonus
     ability_modifier: chex.ArrayDevice  # ability bonus for each stat
@@ -402,10 +402,11 @@ def apply_death(state):
                                                    state.scene.party.action_resources)
     return state
 
+
 global char_names
 
 
-def repr_action(action : ActionTuple):
+def repr_action(action: ActionTuple):
     def name(char_names, character: Character):
         return char_names[character.party.item()][character.index.item()]
 
@@ -417,6 +418,7 @@ def repr_action(action : ActionTuple):
 
 def print_action(action):
     print(repr_action(action))
+
 
 debug = False
 
@@ -457,14 +459,16 @@ def _step(state: State, action: Array) -> State:
 
 
 class DND5E(core.Env):
-    def __init__(self):
+    def __init__(self, config=None):
         super().__init__()
-
-    def _init(self, key: jax.random.PRNGKey, config=None) -> State:
+        self._init_state: State = _init(None, config)
         config = default_config if config is None else config
         global char_names
         char_names = [list(config[ConfigItems.PARTY][party].keys()) for party in constants.Party]
-        return _init(key, config)
+
+    def _init(self, key: jax.random.PRNGKey) -> State:
+        del key
+        return jax.tree.map(lambda x: x.copy(), self._init_state)
 
     def _step(self, state: core.State, action: Array, key) -> State:
         del key
@@ -492,6 +496,7 @@ class DND5E(core.Env):
 wrappers below here
 """
 
+
 def wrap_reward_on_hitbar_percentage(env):
     def new_step(parent_env, state, action, key):
         prev_state = jax.tree.map(lambda s: s.copy(), state)
@@ -503,5 +508,24 @@ def wrap_reward_on_hitbar_percentage(env):
         reward = reward.sum(-1) / N_CHARACTERS
         reward = reward[(jnp.arange(N_PLAYERS) + 1) % 2]
         return next_state.replace(rewards=reward)
+
+    return DND5EProxy(env, step_wrapper=new_step)
+
+
+def wrap_win_first_death(env):
+    def new_step(parent_env, state, action, key):
+        winner = state.current_player.squeeze(-1)
+        next_state = parent_env.step(state, action, key)
+        # game over if anyones hitpoints drops below or equal 0
+        game_over = jnp.any(jnp.sum(next_state.scene.party.hitpoints <= 0, -1) > 0)
+        reward = jax.lax.cond(
+            game_over,
+            lambda: jnp.float32([-1, -1]).at[winner].set(1),
+            lambda: jnp.zeros(2, jnp.float32),
+        )
+        return next_state.replace(
+            rewards=reward,
+            terminated=game_over
+        )
 
     return DND5EProxy(env, step_wrapper=new_step)

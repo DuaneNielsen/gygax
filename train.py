@@ -82,7 +82,8 @@ def get_recurrent_function(env):
 
         # negate the discount when control passes to the opposing party
         tt = state.scene.turn_tracker
-        discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1), -1.0 * jnp.ones_like(value),
+        discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1),
+                             -1.0 * jnp.ones_like(value),
                              jnp.ones_like(value))
         discount = jnp.where(state.terminated, 0.0, discount)
 
@@ -226,7 +227,8 @@ if __name__ == '__main__':
 
     # environment
     env = dnd5e.DND5E()
-    env = dnd5e.wrap_reward_on_hitbar_percentage(env)
+    # env = dnd5e.wrap_reward_on_hitbar_percentage(env)
+    env = dnd5e.wrap_win_first_death(env)
 
     # setup model
     state = env.init(rng_env)

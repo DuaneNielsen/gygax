@@ -12,6 +12,7 @@ from flax import nnx
 import orbax.checkpoint as ocp
 from pathlib import Path
 
+
 def convert_tree_to_graph(
         tree: mctx.Tree,
         action_labels: Optional[Callable] = None,
@@ -31,11 +32,15 @@ def convert_tree_to_graph(
     batch_size = tree.node_values.shape[0]
 
     def node_to_str(node_i, reward=0, discount=1):
+        terminated = tree.embeddings.terminated[batch_index, node_i].item()
+        color = "red" if terminated else "blue"
         return (f"{node_i}\n"
                 f"Reward: {reward:.2f}\n"
                 f"Discount: {discount:.2f}\n"
                 f"Value: {tree.node_values[batch_index, node_i]:.2f}\n"
-                f"Visits: {tree.node_visits[batch_index, node_i]}\n")
+                f"Visits: {tree.node_visits[batch_index, node_i]}\n"
+                f"Terminal: {terminated}\n"
+                ), color
 
     def edge_to_str(node_i, a_i):
         node_index = jnp.full([batch_size], node_i)
@@ -51,23 +56,22 @@ def convert_tree_to_graph(
     graph = pygraphviz.AGraph(directed=True)
 
     # Add root
-    graph.add_node(0, label=node_to_str(node_i=0), color="green")
+    graph.add_node(0, label=node_to_str(node_i=0)[0], color="green")
     # Add all other nodes and connect them up.
     for node_i in range(tree.num_simulations):
         for a_i in range(tree.num_actions):
             # Index of children, or -1 if not expanded
             children_i = tree.children_index[batch_index, node_i, a_i]
             if children_i >= 0:
-                graph.add_node(
-                    children_i,
-                    label=node_to_str(
-                        node_i=children_i,
-                        reward=tree.children_rewards[batch_index, node_i, a_i],
-                        discount=tree.children_discounts[batch_index, node_i, a_i]),
-                    color="red")
+                label, color = node_to_str(
+                    node_i=children_i,
+                    reward=tree.children_rewards[batch_index, node_i, a_i],
+                    discount=tree.children_discounts[batch_index, node_i, a_i])
+                graph.add_node(children_i, label=label, color=color)
                 graph.add_edge(node_i, children_i, label=edge_to_str(node_i, a_i))
 
     return graph
+
 
 def make_tree(env, rng_key, selfplay_batch_size, selfplay_num_simulations):
     recurrent_fn = get_recurrent_function(env)
@@ -96,12 +100,13 @@ def make_tree(env, rng_key, selfplay_batch_size, selfplay_num_simulations):
     )
 
     return policy_output
-if __name__ == '__main__':
 
+
+if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
     parser.add_argument('--selfplay_batch_size', type=int, default=2)
-    parser.add_argument('--selfplay_num_simulations', type=int, default=64)
+    parser.add_argument('--selfplay_num_simulations', type=int, default=256)
     parser.add_argument('--selfplay_max_steps', type=int, default=10)
     parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
@@ -111,7 +116,8 @@ if __name__ == '__main__':
 
     print('loading env')
     env = dnd5e.DND5E()
-    env = dnd5e.wrap_reward_on_hitbar_percentage(env)
+    # env = dnd5e.wrap_reward_on_hitbar_percentage(env)
+    env = dnd5e.wrap_win_first_death(env)
 
     print('loading network')
     state = env.init(rng_env)
