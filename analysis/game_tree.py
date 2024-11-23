@@ -38,6 +38,7 @@ def convert_tree_to_graph(
                 f"Reward: {reward:.2f}\n"
                 f"Discount: {discount:.2f}\n"
                 f"Value: {tree.node_values[batch_index, node_i]:.2f}\n"
+                f"Raw Value: {tree.raw_values[batch_index, node_i]:.2f}\n"
                 f"Visits: {tree.node_visits[batch_index, node_i]}\n"
                 f"Terminal: {terminated}\n"
                 ), color
