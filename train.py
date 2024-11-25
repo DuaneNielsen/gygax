@@ -49,6 +49,18 @@ class MLP(nnx.Module):
         return policy, value
 
 
+class ModelEnsemble(nnx.Module):
+    def __init__(self, models):
+        super().__init__()
+        # Create multiple models using different PRNGKey splits
+        self.models = models
+
+    def __call__(self, x):
+        # Run input through all models
+        outputs = [model(x) for model in self.models]
+        return tuple([jnp.stack(x) for x in list(zip(*outputs))])
+
+
 def save_checkpoint(model, checkpoint_path):
     _, state = nnx.split(model)
     checkpointer = ocp.StandardCheckpointer()
@@ -76,18 +88,29 @@ def train_step(model, optimizer, observation, target_policy, target_value):
     return loss
 
 
-def get_recurrent_function(env):
+def get_recurrent_function(env, evaluation=False):
     step = jax.vmap(jax.jit(env.step))
 
-    def recurrent_fn(model, rng_key: jnp.ndarray, action: jnp.ndarray, state: pgx.State):
-        # model: params
+    def recurrent_fn(params, rng_key: jnp.ndarray, action: jnp.ndarray, state: pgx.State):
+        if evaluation:
+            model, baseline_player = params
+        else:
+            model = params
+
         # state: embedding
         del rng_key
         current_player = state.current_player.squeeze(-1)
         state = step(state, action)
         observation = vmap_flatten(state.observation)
 
+        # model
         logits, value = nnx.jit(model)(observation)
+
+        if evaluation:
+            batch_range = jnp.arange(logits.shape[1])
+            logits = logits[baseline_player, batch_range]
+            value = value[baseline_player, batch_range]
+
         value = value.squeeze(-1)
 
         # mask invalid actions
@@ -114,7 +137,6 @@ def get_recurrent_function(env):
 
     return recurrent_fn
 
-
 @chex.dataclass
 class Checksums:
     observation_checksum: jax.Array
@@ -124,7 +146,6 @@ class Checksums:
 class SelfplayOutput(NamedTuple):
     state: dnd5e.State
     action: jnp.ndarray
-    next_state: dnd5e.State
     obs: jnp.ndarray
     reward: jnp.ndarray
     terminated: jnp.ndarray
@@ -177,24 +198,34 @@ def copy_tree_without_embeddings(tree: tree_lib.Tree[T]) -> tree_lib.Tree[T]:
     )
 
 
-def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_simulations, embed_tree=False):
+def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_simulations, embed_tree=False, evaluate=False):
     state_axes = nnx.StateAxes({...: None})
 
     @nnx.pmap(in_axes=(state_axes, 0), out_axes=0, devices=jax.devices())
     def selfplay(model, selfplay_rng_key: jnp.ndarray) -> SelfplayOutput:
         batch_size = selfplay_batch_size // num_devices
-        recurrent_fn = get_recurrent_function(env)
+        recurrent_fn = get_recurrent_function(env, evaluate)
 
         def step_fn(state, rng_key) -> SelfplayOutput:
             rng_key, rng_search, rng_env, rng_policy = jax.random.split(rng_key, 4)
             observation = vmap_flatten(state.observation)
+            current_player = state.current_player.squeeze(-1)
 
             logits, value = nnx.jit(model)(observation)
+
+            if evaluate:
+                batch_range = jnp.arange(logits.shape[1])
+                logits = logits[current_player, batch_range]
+                value = value[current_player, batch_range]
+
             value = value.squeeze(-1)
             root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
 
+            # when evaluating, use the baseline
+            params = (model, current_player) if evaluate else model
+
             policy_output = mctx.gumbel_muzero_policy(
-                params=model,
+                params=params,
                 rng_key=rng_search,
                 root=root,
                 recurrent_fn=nnx.jit(recurrent_fn),
@@ -212,7 +243,6 @@ def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_sim
             next_state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, action, env_keys)
 
             # calc reward and discount
-            current_player = state.current_player.squeeze(-1)
             tt = next_state.scene.turn_tracker
             reward = next_state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
             discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1),
@@ -239,7 +269,6 @@ def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_sim
             return next_state, SelfplayOutput(
                 state=state,
                 action=action,
-                next_state=next_state,
                 obs=observation,
                 action_weights=policy_output.action_weights,
                 reward=reward,
@@ -300,8 +329,7 @@ def compute_loss_input(data: SelfplayOutput, selfplay_batch_size, selfplay_max_n
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--features', type=int, nargs='+', default=[64, 32, 1])
+    parser.add_argument('--hidden_layers', type=int, nargs='+', default=[64, 32, 1])
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--selfplay_batch_size', type=int, default=256)
@@ -327,12 +355,19 @@ if __name__ == '__main__':
     model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
     optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
 
+    baseline_model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+    baseline_chkpt = '/mnt/megatron/data/dnd5e/wandb/offline-run-20241124_222111-6p2bjtub/files/model_epoch199'
+    baseline_model = load_checkpoint(baseline_model, baseline_chkpt)
+    baseline_ensemble = ModelEnsemble([model, baseline_model])
+
     # monitoring
     wandb.init(project=f'alphazero-dnd5e', config=args.__dict__, settings=wandb.Settings(code_dir="."))
     run_dir = Path(f'{wandb.run.dir}')
     frames = 0
 
+    # instantiate selfplay and eval
     selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
+    playbaseline = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations, evaluate=True)
 
     for epoch in tqdm.trange(args.num_epochs):
 
@@ -361,13 +396,20 @@ if __name__ == '__main__':
         )
 
         # train the network
-        loss = jnp.array([0])
+        loss = jnp.array([4.])
         for i in range(num_updates):
             minibatch: Sample = jax.tree_util.tree_map(lambda x: x[i], minibatches)
             batch_loss = train_step(model, optimizer, minibatch.obs, minibatch.policy_tgt, minibatch.value_tgt)
             loss = batch_loss * 0.5 + loss * 0.5
 
         wandb.log({'loss': loss.item()})
+
+        # evaluate the network
+        rng_play_baseline = jax.random.fold_in(rng_search, jnp.array(epoch))
+        rng_play_baseline_device = jax.random.split(rng_play_baseline, num_devices)
+        eval_data = playbaseline(baseline_ensemble, rng_play_baseline_device)
+        with Path(run_dir / f'data_epoch{epoch:03}_eval.pkl').open(mode='wb') as f:
+            pickle.dump((eval_data.checksums, rng_selfplay_devices, dummy_obs, dummy_policy, dummy_value), f)
 
     # checkpoint
     checkpoint_path = Path(run_dir.absolute() / f'final_epoch{epoch:03}')
