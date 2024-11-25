@@ -86,10 +86,8 @@ if __name__ == '__main__':
     plot_tree = False
     selected_batch = 0
 
-
     with run.joinpath(f'files/data_epoch{epoch:03}.pkl').open('rb') as f:
         checksums, rng_selfplay_devices, dummy_obs, dummy_policy, dummy_value = pickle.load(f)
-
 
     n_device, t_max, batch = checksums.observation_checksum.shape
     print(f'devices {n_device} selfplay_batch_size {batch} selfplay_max_num_steps {t_max}')
