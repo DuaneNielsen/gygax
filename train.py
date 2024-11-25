@@ -17,16 +17,19 @@ from constants import Actions, N_ACTIONS, N_CHARACTERS, N_PLAYERS
 from play import PartyVisualizer
 import pgx
 import mctx
-from typing import NamedTuple
+from typing import NamedTuple, TypeVar
 from mctx._src.tree import SearchSummary
+from mctx._src import tree as tree_lib
 import orbax.checkpoint as ocp
 import tqdm
 import wandb
+import chex
 
 devices = jax.local_devices()
 num_devices = len(devices)
 
 vmap_flatten = jax.vmap(flatten_pytree_batched)
+T = TypeVar("T")
 
 
 class MLP(nnx.Module):
@@ -44,6 +47,20 @@ class MLP(nnx.Module):
         policy = self.policy_head(hidden)
         value = self.value_head(hidden)
         return policy, value
+
+
+def save_checkpoint(model, checkpoint_path):
+    _, state = nnx.split(model)
+    checkpointer = ocp.StandardCheckpointer()
+    checkpointer.save(checkpoint_path, state)
+
+
+def load_checkpoint(model, checkpoint_path):
+    abstract_model = nnx.eval_shape(lambda: model)
+    graphdef, abstract_state = nnx.split(abstract_model)
+    checkpointer = ocp.StandardCheckpointer()
+    state_restored = checkpointer.restore(Path(checkpoint_path).absolute(), abstract_state)
+    return nnx.merge(graphdef, state_restored)
 
 
 @nnx.jit
@@ -70,7 +87,7 @@ def get_recurrent_function(env):
         state = step(state, action)
         observation = vmap_flatten(state.observation)
 
-        logits, value = jax.jit(model)(observation)
+        logits, value = nnx.jit(model)(observation)
         value = value.squeeze(-1)
 
         # mask invalid actions
@@ -98,29 +115,81 @@ def get_recurrent_function(env):
     return recurrent_fn
 
 
+@chex.dataclass
+class Checksums:
+    observation_checksum: jax.Array
+    search_tree_action_checksum: jax.Array
+
+
 class SelfplayOutput(NamedTuple):
     state: dnd5e.State
+    action: jnp.ndarray
+    next_state: dnd5e.State
     obs: jnp.ndarray
     reward: jnp.ndarray
     terminated: jnp.ndarray
     action_weights: jnp.ndarray
     discount: jnp.ndarray
     search_tree_summary: SearchSummary
+    search_tree: tree_lib.Tree[T]
+    checksums: Checksums  # information that can be used to verify search tree regeneration
 
 
-def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_simulations):
+@chex.dataclass
+class Embeddings:
+    terminated: jax.Array
+    current_player: jax.Array
+    pos: jax.Array
+
+
+def copy_tree_without_embeddings(tree: tree_lib.Tree[T]) -> tree_lib.Tree[T]:
+    """Creates a copy of a Tree instance without copying the embeddings field.
+
+    Args:
+        tree: The source Tree instance to copy.
+
+    Returns:
+        A new Tree instance with copied arrays for all fields except embeddings,
+        which maintains a reference to the original embeddings.
+    """
+
+    embeddings = Embeddings(
+        terminated=jnp.array(tree.embeddings.terminated),
+        current_player=jnp.array(tree.embeddings.current_player),
+        pos=jnp.array(tree.embeddings.scene.party.pos)
+    )
+
+    return tree_lib.Tree(
+        node_visits=jnp.array(tree.node_visits),
+        raw_values=jnp.array(tree.raw_values),
+        node_values=jnp.array(tree.node_values),
+        parents=jnp.array(tree.parents),
+        action_from_parent=jnp.array(tree.action_from_parent),
+        children_index=jnp.array(tree.children_index),
+        children_prior_logits=jnp.array(tree.children_prior_logits),
+        children_visits=jnp.array(tree.children_visits),
+        children_rewards=jnp.array(tree.children_rewards),
+        children_discounts=jnp.array(tree.children_discounts),
+        children_values=jnp.array(tree.children_values),
+        embeddings=embeddings,
+        root_invalid_actions=jnp.array(tree.root_invalid_actions),
+        extra_data=tree.extra_data
+    )
+
+
+def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_simulations, embed_tree=False):
     state_axes = nnx.StateAxes({...: None})
 
     @nnx.pmap(in_axes=(state_axes, 0), out_axes=0, devices=jax.devices())
-    def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
+    def selfplay(model, selfplay_rng_key: jnp.ndarray) -> SelfplayOutput:
         batch_size = selfplay_batch_size // num_devices
         recurrent_fn = get_recurrent_function(env)
 
         def step_fn(state, rng_key) -> SelfplayOutput:
-            rng_key, rng_search, rng_env = jax.random.split(rng_key, 3)
+            rng_key, rng_search, rng_env, rng_policy = jax.random.split(rng_key, 4)
             observation = vmap_flatten(state.observation)
 
-            logits, value = model(observation)
+            logits, value = nnx.jit(model)(observation)
             value = value.squeeze(-1)
             root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
 
@@ -137,32 +206,52 @@ def make_selfplay(env, selfplay_batch_size, selfplay_max_steps, selfplay_num_sim
 
             # step the environment
             # jax.debug.print('illegal actions {}', state.legal_action_mask[jnp.arange(256), ~policy_output.action].sum())
+            action = jax.random.categorical(rng_policy, jnp.log(policy_output.action_weights), axis=-1)
+            # jax.debug.print('{} {} {}', rng_policy, action, value)
             env_keys = jax.random.split(rng_env, batch_size)
-            state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, policy_output.action, env_keys)
+            next_state = jax.vmap(auto_reset(jax.jit(env.step), jax.jit(env.init)))(state, action, env_keys)
 
             # calc reward and discount
             current_player = state.current_player.squeeze(-1)
-            tt = state.scene.turn_tracker
-            reward = state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
+            tt = next_state.scene.turn_tracker
+            reward = next_state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
             discount = jnp.where(tt.party.squeeze(-1) != tt.prev_party.squeeze(-1),
                                  -1.0 * jnp.ones_like(value),
                                  jnp.ones_like(value))
-            discount = jnp.where(state.terminated, 0.0, discount)
+            discount = jnp.where(next_state.terminated, 0.0, discount)
 
             # return the search stats so we can track them
             search_tree_summary = policy_output.search_tree.summary()
-            return state, SelfplayOutput(
+
+            # used to regenerate the selfplay search for debugging
+            action_csum = policy_output.search_tree.action_from_parent.sum(-1)
+            observation_csum = observation.sum(-1)
+            checksums = Checksums(
+                observation_checksum=observation_csum,
+                search_tree_action_checksum=action_csum,
+            )
+
+            if embed_tree:
+                search_tree = copy_tree_without_embeddings(policy_output.search_tree),
+            else:
+                search_tree = None
+
+            return next_state, SelfplayOutput(
                 state=state,
+                action=action,
+                next_state=next_state,
                 obs=observation,
                 action_weights=policy_output.action_weights,
                 reward=reward,
-                terminated=state.terminated,
+                terminated=next_state.terminated,
                 discount=discount,
                 search_tree_summary=search_tree_summary,
+                search_tree=search_tree,
+                checksums=checksums,
             )
 
         # init the env and generate a batch of trajectories
-        rng_key, rng_env_init = jax.random.split(rng_key, 2)
+        rng_key, rng_env_init = jax.random.split(selfplay_rng_key, 2)
         state = jax.jit(jax.vmap(env.init))(jax.random.split(rng_env_init, selfplay_batch_size))
         key_seq = jax.random.split(rng_key, selfplay_max_steps)
         _, data = jax.lax.scan(jax.jit(step_fn), state, key_seq)
@@ -185,6 +274,8 @@ def compute_loss_input(data: SelfplayOutput, selfplay_batch_size, selfplay_max_n
     # If episode is truncated, there is no value target
     # So when we compute value loss, we need to mask it
     value_mask = jnp.cumsum(data.terminated[::-1, :], axis=0)[::-1, :] >= 1
+
+    # est_traj_len = jnp.argmin(jnp.arange(value_mask.shape[-1]) * value_mask, -1)
 
     # Compute value target
     def body_fn(carry, i):
@@ -215,11 +306,10 @@ if __name__ == '__main__':
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--selfplay_batch_size', type=int, default=256)
     parser.add_argument('--selfplay_num_simulations', type=int, default=64)
-    parser.add_argument('--selfplay_max_steps', type=int, default=10)
+    parser.add_argument('--selfplay_max_steps', type=int, default=24)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--training_batch_size', type=int, default=8)
     args = parser.parse_args()
-
 
     # random keys
     rng_key = jax.random.PRNGKey(args.seed)
@@ -231,25 +321,36 @@ if __name__ == '__main__':
     env = dnd5e.wrap_win_first_death(env)
 
     # setup model
-    state = env.init(rng_env)
-    observation_features = flatten_pytree_batched(state.observation).shape[0]
+    dummy_state = env.init(rng_env)
+    dummy_obs = flatten_pytree_batched(dummy_state.observation)
+    observation_features = dummy_obs.shape[0]
     model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
     optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
 
     # monitoring
     wandb.init(project=f'alphazero-dnd5e', config=args.__dict__, settings=wandb.Settings(code_dir="."))
+    run_dir = Path(f'{wandb.run.dir}')
     frames = 0
 
+    selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
+
     for epoch in tqdm.trange(args.num_epochs):
+
+        checkpoint_path = Path(run_dir.absolute() / f'model_epoch{epoch:03}')
+        save_checkpoint(model, str(checkpoint_path))
+        dummy_policy, dummy_value = nnx.jit(model)(dummy_obs)
+
         # selfplay
-        selfplay = make_selfplay(env, args.selfplay_batch_size, args.selfplay_max_steps, args.selfplay_num_simulations)
         rng_selfplay_devices = jax.random.split(rng_search, num_devices)
         data = selfplay(model, rng_selfplay_devices)
         # samples > (#devices, batch, max_num_steps, ...)
+        with Path(run_dir / f'data_epoch{epoch:03}.pkl').open(mode='wb') as f:
+            pickle.dump((data.checksums, rng_selfplay_devices, dummy_obs, dummy_policy, dummy_value), f)
+
         samples = compute_loss_input(data, args.selfplay_batch_size, args.selfplay_max_steps)
 
         # load and shuffle the batch
-        samples = jax.device_get(samples) # read into host memory
+        samples = jax.device_get(samples)  # read into host memory
         samples = jax.tree_util.tree_map(lambda x: x.reshape((-1, *x.shape[3:])), samples)
         rng_key, rng_batch = jax.random.split(rng_key)
         ixs = jax.random.permutation(rng_batch, jnp.arange(samples.obs.shape[0]))
@@ -268,11 +369,9 @@ if __name__ == '__main__':
 
         wandb.log({'loss': loss.item()})
 
-        # checkpoint
-        _, state = nnx.split(model)
-        checkpointer = ocp.StandardCheckpointer()
-        checkpoint_path = Path(f'{wandb.run.dir}').absolute() / f'state_epoch{epoch:3d}'
-        checkpointer.save(checkpoint_path, state)
-        latest_dir = Path(f'{wandb.run.dir}').absolute() / f'latest'
-        latest_dir.unlink(missing_ok=True)
-        latest_dir.symlink_to(checkpoint_path)
+    # checkpoint
+    checkpoint_path = Path(run_dir.absolute() / f'final_epoch{epoch:03}')
+    save_checkpoint(model, str(checkpoint_path))
+    latest_dir = run_dir.absolute() / f'latest'
+    latest_dir.unlink(missing_ok=True)
+    latest_dir.symlink_to(checkpoint_path)

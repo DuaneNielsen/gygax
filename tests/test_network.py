@@ -1,6 +1,8 @@
 import jax
 from flax import nnx
 import jax.numpy as jnp
+
+import train
 from constants import *
 from funcs import create_argmin_mask
 import pickle
@@ -12,6 +14,7 @@ from train import train_step, MLP
 import numpy as onp
 import optax
 from tree_serialization import flatten_pytree_batched
+import pytest
 
 vmap_flatten = jax.vmap(flatten_pytree_batched)
 
@@ -68,6 +71,19 @@ def target_policy_signal(state, rng):
     # jax.debug.print('{}', policy)
     # jax.debug.print('{}', policy.shape)
     return policy
+
+
+@pytest.fixture
+def env():
+    return dnd5e.DND5E()
+
+@pytest.fixture
+def model(env):
+    rng_env, rng_model = jax.random.split(jax.random.PRNGKey(0))
+    state = env.init(rng_env)
+    observation_features = flatten_pytree_batched(state.observation).shape[0]
+    model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+    return model
 
 def test_policy_signal():
     env = dnd5e.DND5E()
@@ -239,3 +255,29 @@ def test_network():
     assert policy_loss < 1.1
     # assert jnp.sum(jnp.argmax(policy, -1) == jnp.argmax(test_policy, -1)) < 5
     assert value_loss < 0.11
+
+
+def test_checkpointing(env, model):
+    import numpy as np
+    import shutil
+
+    rng_key = jax.random.PRNGKey(0)
+    rng_key, rng_env = jax.random.split(rng_key)
+    state = env.init(rng_env)
+    obs = flatten_pytree_batched(state.observation)
+    policy, value = model(obs)
+
+    first_checkpoint = Path('./local_checkpoint')
+    if first_checkpoint.exists():
+        shutil.rmtree(str(first_checkpoint))
+
+    _, state = nnx.split(model)
+    train.save_checkpoint(model, first_checkpoint.absolute())
+    model = train.load_checkpoint(model, first_checkpoint.absolute())
+    _, restored_state = nnx.split(model)
+    jax.tree.map(np.testing.assert_array_equal, state, restored_state)
+
+    rest_policy, rest_value = model(obs)
+
+    np.testing.assert_array_equal(policy, rest_policy)
+    np.testing.assert_array_equal(value, rest_value)
