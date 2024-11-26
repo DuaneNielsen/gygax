@@ -15,6 +15,7 @@ import numpy as onp
 import optax
 from tree_serialization import flatten_pytree_batched
 import pytest
+import random
 
 vmap_flatten = jax.vmap(flatten_pytree_batched)
 
@@ -156,9 +157,9 @@ def generate_synthetic_data():
 
 
 def test_network():
-    batch_size = 8
+    batch_size = 16
     dataset_size = 100
-    num_epochs = 2**7
+    num_epochs = 2**8
     learning_rate = 1e-3
     hidden_dim = 2**7
 
@@ -176,6 +177,7 @@ def test_network():
         with dataset_file.open('wb') as f:
             pickle.dump(buffer, f)
 
+    random.seed(0)
     shuffle(buffer)
     observation, policy, value, legal_actions, current_player = tuple([jnp.stack(d) for d in zip(*buffer)])
     max_target = jnp.max(value)
@@ -202,6 +204,7 @@ def test_network():
     model = MLP(observation.shape[1], hidden_dim, num_actions, rngs=nnx.Rngs(rng_model))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
     policy, value = model(train_observation[0])
+    value = value.squeeze(-1)
     assert value.shape == train_value[0].shape
     assert policy.shape == train_policy[0].shape
 
@@ -224,6 +227,7 @@ def test_network():
     from math import prod
 
     policy, value = model(test_observation)
+    value = value.squeeze(-1)
     policy = policy * test_legal
     test_loss = jnp.mean((value - test_value) ** 2)
     jax.debug.print('{}', value.squeeze())
@@ -252,9 +256,9 @@ def test_network():
 
     print(value_loss)
 
-    assert policy_loss < 1.1
+    assert policy_loss < .52
     # assert jnp.sum(jnp.argmax(policy, -1) == jnp.argmax(test_policy, -1)) < 5
-    assert value_loss < 0.11
+    assert value_loss < 0.02
 
 
 def test_checkpointing(env, model):

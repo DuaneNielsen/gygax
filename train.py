@@ -95,7 +95,7 @@ def load_checkpoint(model, checkpoint_path):
 def train_step(model, optimizer, observation, target_policy, target_value):
     def loss_fn(model, observation, target_policy, target_value):
         policy, value = model(observation)
-        return jnp.mean(optax.softmax_cross_entropy(policy, target_policy) + (value - target_value) ** 2)
+        return jnp.mean(optax.softmax_cross_entropy(policy, target_policy) + (value.squeeze(-1) - target_value) ** 2)
 
     grad_fn = nnx.value_and_grad(loss_fn)
     loss, grads = grad_fn(model, observation, target_policy, target_value)
@@ -366,7 +366,7 @@ if __name__ == '__main__':
     parser.add_argument('--selfplay_num_simulations', type=int, default=64)
     parser.add_argument('--selfplay_max_steps', type=int, default=24)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--training_batch_size', type=int, default=8)
+    parser.add_argument('--training_batch_size', type=int, default=16)
     args = parser.parse_args()
 
     # random keys
