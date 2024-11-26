@@ -34,6 +34,7 @@ T = TypeVar("T")
 
 class MLP(nnx.Module):
     def __init__(self, din: int, hidden: int, n_actions: int, rngs: nnx.Rngs):
+        super().__init__()
         self.linear_0 = nnx.Linear(din, hidden, rngs=rngs)
         self.linear_1 = nnx.Linear(hidden, hidden, rngs=rngs)
         self.value_head = nnx.Linear(hidden, 1, rngs=rngs, use_bias=False)
@@ -46,6 +47,24 @@ class MLP(nnx.Module):
         hidden = nnx.relu(hidden)
         policy = self.policy_head(hidden)
         value = self.value_head(hidden)
+        return policy, value
+
+
+class MaxEntropyNetwork(nnx.Module):
+    """
+    A simple network which provides no guidance to the alphazero algorithm,
+    action selection will be based entirely on balanced search of the game tree
+
+    Useful as a baseline to verify that the policy and value network is learning something meaningful
+    """
+    def __init__(self, n_actions):
+        super().__init__()
+        self.n_actions = n_actions
+
+    def __call__(self, obs):
+        batch_size = obs.shape[0]
+        policy = jnp.ones((batch_size, self.n_actions)) / self.n_actions
+        value = jnp.zeros((batch_size, 1))
         return policy, value
 
 
@@ -327,6 +346,20 @@ def compute_loss_input(data: SelfplayOutput, selfplay_batch_size, selfplay_max_n
     )
 
 
+def write_metrics(data, step, prefix='eval'):
+    player_0_wins = (data.state.rewards[..., 0] == 1.).sum()
+    player_1_wins = (data.state.rewards[..., 1] == 1.).sum()
+    t_len = data.state._step_count.squeeze(-1)[data.terminated]
+
+    wandb.log({
+        f"{prefix}_player0_wins": player_0_wins,
+        f"{prefix}_player1_wins": player_1_wins,
+        f"{prefix}_player0_win_rate": player_0_wins / (player_0_wins + player_1_wins),
+        f"{prefix}_traj_len_mean": jnp.mean(t_len),
+        f"{prefix}_traj_count": t_len.shape[0]
+    }, step=step)
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--hidden_layers', type=int, nargs='+', default=[64, 32, 1])
@@ -355,9 +388,11 @@ if __name__ == '__main__':
     model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
     optimizer = nnx.Optimizer(model, optax.adam(args.learning_rate))
 
-    baseline_model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
-    baseline_chkpt = '/mnt/megatron/data/dnd5e/wandb/offline-run-20241124_222111-6p2bjtub/files/model_epoch199'
-    baseline_model = load_checkpoint(baseline_model, baseline_chkpt)
+    # baseline_model = MLP(observation_features, 128, env.num_actions, rngs=nnx.Rngs(rng_model))
+    # baseline_chkpt = '/mnt/megatron/data/dnd5e/wandb/offline-run-20241124_222111-6p2bjtub/files/model_epoch199'
+    # baseline_model = load_checkpoint(baseline_model, baseline_chkpt)
+
+    baseline_model = MaxEntropyNetwork(env.num_actions)
     baseline_ensemble = ModelEnsemble([model, baseline_model])
 
     # monitoring
@@ -394,6 +429,7 @@ if __name__ == '__main__':
         minibatches = jax.tree_util.tree_map(
             lambda x: x.reshape((num_updates, num_devices, -1) + x.shape[1:]), samples
         )
+        write_metrics(data, step=epoch, prefix='splay')
 
         # train the network
         loss = jnp.array([4.])
@@ -402,7 +438,7 @@ if __name__ == '__main__':
             batch_loss = train_step(model, optimizer, minibatch.obs, minibatch.policy_tgt, minibatch.value_tgt)
             loss = batch_loss * 0.5 + loss * 0.5
 
-        wandb.log({'loss': loss.item()})
+        wandb.log({'loss': loss.item()}, step=epoch)
 
         # evaluate the network
         rng_play_baseline = jax.random.fold_in(rng_search, jnp.array(epoch))
@@ -410,6 +446,7 @@ if __name__ == '__main__':
         eval_data = playbaseline(baseline_ensemble, rng_play_baseline_device)
         with Path(run_dir / f'data_epoch{epoch:03}_eval.pkl').open(mode='wb') as f:
             pickle.dump((eval_data.checksums, rng_selfplay_devices, dummy_obs, dummy_policy, dummy_value), f)
+        write_metrics(eval_data, step=epoch, prefix='eval')
 
     # checkpoint
     checkpoint_path = Path(run_dir.absolute() / f'final_epoch{epoch:03}')
