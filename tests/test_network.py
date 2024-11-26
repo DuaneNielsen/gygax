@@ -99,7 +99,7 @@ def generate_data(rng_key, batch_size, dataset_size):
     rng_key, rng_policy, rng_env = jax.random.split(rng_key, 3)
     from matplotlib import pyplot as plt
     from matplotlib import gridspec
-    from viz_refactor import CharacterDataVisualizer
+    from play import CharacterDataVisualizer
     fig = plt.figure(figsize=(18, 15))
     gs = gridspec.GridSpec(4, 4, figure=fig, height_ratios=[1, 1, 1, 1.5])
     fig.suptitle(f'D&D 5e {"party"} State', size=16)
