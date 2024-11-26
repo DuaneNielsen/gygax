@@ -678,3 +678,13 @@ def test_reward_wrapper():
     action = dnd5e.encode_action(Actions.ATTACK_RANGED_WEAPON, 1, TargetParty.ENEMY, 3)
     state = env.step(state, action)
     assert jnp.all(jnp.abs(state.rewards - jnp.array([0.0673077, 0.], dtype=jnp.float32)) < 0.000001)
+
+
+def test_wrap_party_initiative():
+    env = dnd5e.DND5E()
+    state = env.init(jax.random.PRNGKey(0))
+    wrapped_env = dnd5e.wrap_party_initiative(env, 0, -1)
+    wrapped_state = wrapped_env.init(jax.random.PRNGKey(0))
+
+    assert jnp.allclose(state.scene.turn_tracker.initiative_scores[0] - 1, wrapped_state.scene.turn_tracker.initiative_scores[0])
+    assert jnp.allclose(state.scene.turn_tracker.initiative_scores[1], wrapped_state.scene.turn_tracker.initiative_scores[1])

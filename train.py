@@ -12,9 +12,6 @@ import pickle
 from pathlib import Path
 from functools import partial
 from tree_serialization import flatten_pytree_batched
-from plots import LiveProbabilityPlot
-from constants import Actions, N_ACTIONS, N_CHARACTERS, N_PLAYERS
-from play import PartyVisualizer
 import pgx
 import mctx
 from typing import NamedTuple, TypeVar
@@ -380,6 +377,7 @@ if __name__ == '__main__':
     env = dnd5e.DND5E()
     # env = dnd5e.wrap_reward_on_hitbar_percentage(env)
     env = dnd5e.wrap_win_first_death(env)
+    # env = dnd5e.wrap_party_initiative(env, 0, 1)
 
     # setup model
     dummy_state = env.init(rng_env)

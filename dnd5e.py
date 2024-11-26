@@ -498,6 +498,10 @@ wrappers below here
 
 
 def wrap_reward_on_hitbar_percentage(env):
+    """
+    create a dense reward of damage dealt / total party hitpoints
+    """
+
     def new_step(parent_env, state, action, key):
         prev_state = jax.tree.map(lambda s: s.copy(), state)
         next_state = parent_env.step(state, action, key)
@@ -529,3 +533,14 @@ def wrap_win_first_death(env):
         )
 
     return DND5EProxy(env, step_wrapper=new_step)
+
+
+def wrap_party_initiative(env, party, initiative_mod):
+    def new_init(parent_env, rng_key):
+        state = parent_env.init(rng_key)
+        init_score = state.scene.turn_tracker.initiative_scores
+        new_initiative = init_score.at[party].set(init_score[party] + initiative_mod)
+        state.scene.turn_tracker.initiative_scores = new_initiative
+        return state
+
+    return DND5EProxy(env, init_wrapper=new_init)
