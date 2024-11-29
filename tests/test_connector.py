@@ -111,7 +111,7 @@ class CharacterArray:
 
 
 @dataclass
-class Weapon:
+class Attack:
     ability_modifier: int
     damage_dice: str
     expected_damage: float
@@ -165,7 +165,7 @@ class Weapon:
                 damage_dice, expected_damage, damage_type = get_damage(weapon.two_handed_damage, ability_bonus, False)
 
         if weapon.weapon_range == WeaponRange.MELEE:
-            return Weapon(
+            return Attack(
                 ability_modifier=ability_bonus,
                 weapon_range=weapon.weapon_range,
                 damage_dice=weapon.damage["damage_dice"],
@@ -174,7 +174,7 @@ class Weapon:
                 finesse=finesse
             )
         elif weapon.weapon_range == WeaponRange.RANGED:
-            return Weapon(
+            return Attack(
                 ability_modifier=ability_bonus,
                 weapon_range=weapon.weapon_range,
                 damage_dice=weapon.damage["damage_dice"],
@@ -184,7 +184,7 @@ class Weapon:
                 range_long=weapon.range['long']
             )
         elif thrown:
-            return Weapon(
+            return Attack(
                 ability_modifier=ability_bonus,
                 weapon_range=weapon.weapon_range,
                 damage_dice=weapon.damage["damage_dice"],
@@ -277,16 +277,16 @@ class CharacterExtra(Character):
     @property
     def main_attack(self):
         if self.main_hand is not None:
-            return Weapon.make(self.main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity)
+            return Attack.make(self.main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity)
         elif self.two_hand is not None:
-            return Weapon.make(self.two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True)
+            return Attack.make(self.two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True)
         else:
-            return Weapon.make(unarmed, self.ability_modifier.strength, self.ability_modifier.dexterity)
+            return Attack.make(unarmed, self.ability_modifier.strength, self.ability_modifier.dexterity)
 
     @property
     def offhand_attack(self):
         if self.off_hand is not None:
-            return Weapon.make(self.off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True)
+            return Attack.make(self.off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True)
 
     @property
     def ranged_main_hand(self) -> Item:
@@ -340,10 +340,10 @@ class CharacterExtra(Character):
     def ranged_main_attack(self):
         if self.ranged_main_hand is not None:
             thrown = set([p['index'] for p in self.ranged_main_hand.properties]).intersection({"thrown"})
-            return Weapon.make(self.ranged_main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, thrown=thrown)
+            return Attack.make(self.ranged_main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, thrown=thrown)
         elif self.ranged_two_hand is not None:
             thrown = set([p['index'] for p in self.ranged_two_hand.properties]).intersection({"thrown"})
-            return Weapon.make(self.ranged_two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True, thrown=thrown)
+            return Attack.make(self.ranged_two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True, thrown=thrown)
         else:
             return None
 
@@ -351,7 +351,7 @@ class CharacterExtra(Character):
     def ranged_offhand_attack(self):
         if self.ranged_off_hand is not None:
             thrown = set([p['index'] for p in self.ranged_off_hand.properties]).intersection({"thrown"})
-            return Weapon.make(self.ranged_off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True, thrown=thrown)
+            return Attack.make(self.ranged_off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True, thrown=thrown)
         else:
             return None
 
