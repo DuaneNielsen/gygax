@@ -69,6 +69,7 @@ class WeaponArray:
 
 @chex.dataclass
 class CharacterArray:
+    armor_class: jnp.int8
     current_hp: jnp.float16
     prof_bonus: jnp.int8
     armor_class: jnp.int8
@@ -195,7 +196,39 @@ class CharacterExtra(Character):
         self._ranged_main_hand = None
         self._ranged_off_hand = None
         self._ranged_two_hand = None
+        self._armor = None
 
+    @property
+    def armor(self):
+        return self._armor
+
+    @armor.setter
+    def armor(self, armor: Item):
+        if armor is None:
+            self._armor = None
+            return
+        assert armor.equipment_category['index'] == 'armor', "only armor can be equipped in armor slot"
+        assert armor.armor_category != 'Shield', "shields should be equipped in the off_hand slot"
+        self._armor = armor
+
+
+    @property
+    def armor_class(self):
+        base_armor, dex_bonus, shield = 10, True, 0
+        if self._armor is not None:
+            base_armor = self._armor.armor_class['base']
+            dex_bonus =  self._armor.armor_class['dex_bonus']
+
+        if self.off_hand is not None:
+            if self._off_hand.armor_class is not None:
+                shield = self._off_hand.armor_class['base']
+
+        return base_armor + shield + self.ability_modifier.dexterity * dex_bonus
+
+    @armor_class.setter
+    def armor_class(self, ac):
+        # this does nothing by design, it's just to keep the parent class happy
+        pass
 
     @property
     def main_hand(self) -> Item:
@@ -203,11 +236,15 @@ class CharacterExtra(Character):
 
     @main_hand.setter
     def main_hand(self, item):
-        weapon_properties = set([p['index'] for p in item.properties])
-        assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_main_hand to equip ranged or thrown"
-        assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
-        self._main_hand = item
-        self._two_hand = None
+        if item is not None:
+            weapon_properties = set([p['index'] for p in item.properties])
+            assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_main_hand to equip ranged or thrown"
+            assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
+            self._main_hand = item
+            self._two_hand = None
+        else:
+            self._main_hand = unarmed
+            self._two_hand = None
 
     @property
     def off_hand(self) -> Item:
@@ -215,18 +252,21 @@ class CharacterExtra(Character):
 
     @off_hand.setter
     def off_hand(self, item):
-        if item.index == 'shield':
-            self._off_hand = item
-            self._two_hand = None
-        elif item.equipment_category['index'] == "weapon":
-            weapon_properties = set([p['index'] for p in item.properties])
-            assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_off_hand to equip ranged or thrown"
-            assert weapon_properties.intersection({'light'}), "only light weapons can be equipped in off hand"
-            assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
-            self._off_hand = item
-            self._two_hand = None
+        if item is not None:
+            if item.armor_category == 'Shield':
+                self._off_hand = item
+                self._two_hand = None
+            elif item.equipment_category['index'] == "weapon":
+                weapon_properties = set([p['index'] for p in item.properties])
+                assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_off_hand to equip ranged or thrown"
+                assert weapon_properties.intersection({'light'}), "only light weapons can be equipped in off hand"
+                assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
+                self._off_hand = item
+                self._two_hand = None
+            else:
+                assert False, "only shields and light weapons can be off hand equipped in the current implementation"
         else:
-            assert False, "only shields and light weapons can be off hand equipped in the current implementation"
+            self._off_hand = None
 
     @property
     def two_hand(self):
@@ -234,12 +274,13 @@ class CharacterExtra(Character):
 
     @two_hand.setter
     def two_hand(self, item):
-        weapon_properties = set([p['index'] for p in item.properties])
-        assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_two_hand to equip ranged or thrown"
-        assert {'two-handed', 'versatile'} & weapon_properties, "weapon was not versatile or two handed"
-        self._two_hand = item
-        self._main_hand = None
-        self._off_hand = None
+        if item is not None:
+            weapon_properties = set([p['index'] for p in item.properties])
+            assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_two_hand to equip ranged or thrown"
+            assert {'two-handed', 'versatile'} & weapon_properties, "weapon was not versatile or two handed"
+            self._two_hand = item
+            self._main_hand = None
+            self._off_hand = None
 
     @property
     def main_attack(self):
@@ -585,3 +626,30 @@ def test_convert_fighter():
     assert fighter_jaxxed.ranged_main_attack.expected_damage == 5.5
     assert fighter_jaxxed.ranged_main_attack.damage_type == DamageType.PIERCING
 
+def test_equip_armor():
+    fighter = CharacterExtra(
+        classs=CLASSES["fighter"],
+        strength=16,
+        dexterity=12,
+        constitution=16,
+        intelligence=8,
+        wisdom=12,
+        charisma=8
+    )
+    fighter.armor = Item('chain-mail')
+    assert fighter.armor_class == Item('chain-mail').armor_class['base']
+    fighter.off_hand = Item('shield')
+    assert fighter.armor_class == Item('chain-mail').armor_class['base'] + 2
+    fighter.off_hand = None
+    assert fighter.armor_class == Item('chain-mail').armor_class['base']
+    fighter.armor = None
+    assert fighter.armor_class == 10 + 1
+    fighter.armor = Item('leather-armor')
+    assert fighter.armor_class == 11 + 1
+    fighter.off_hand = Item('shield')
+    assert fighter.armor_class == 11 + 1 + 2
+    fighter.off_hand = Item('dagger')
+    assert fighter.armor_class == 11 + 1
+
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.armor = Item('crossbow-light')
