@@ -44,39 +44,6 @@ unarmed = _Item(
 )
 
 
-def simplify_dict_with_index(data, is_root=True):
-    """
-    Recursively processes a dictionary and replaces any nested dictionaries
-    containing an 'index' key with just their index value, except for the root dictionary.
-
-    Args:
-        data: Input dictionary or list to process
-        is_root: Boolean indicating if this is the root dictionary
-
-    Returns:
-        Processed dictionary or list with simplified structure
-    """
-    if isinstance(data, dict):
-        # If it's a dictionary with 'index' and not the root, return just the index value
-        if 'index' in data:
-            if is_root:
-                data['name'] = data['index']
-            else:
-                return data['index']
-
-        # Otherwise, process each value in the dictionary
-        return {key: simplify_dict_with_index(value, is_root=False)
-                for key, value in data.items()}
-
-    elif isinstance(data, list):
-        # If it's a list, process each element
-        return [simplify_dict_with_index(item, is_root=False) for item in data]
-
-    else:
-        # Return non-dict and non-list values as is
-        return data
-
-
 map_damage_type = {}
 for damage_type in DamageType:
     map_damage_type[damage_type.name.lower()] = damage_type
@@ -381,11 +348,6 @@ def convert_to_character_array(character: CharacterExtra, clazz: type) -> Charac
 
     return clazz(**kwargs)
 
-
-def test_simplify_dict():
-    longsword = Item("longsword")
-    longsword_simplified = simplify_dict_with_index(dict(longsword))
-    print(longsword_simplified)
 
 
 def test_equip_longsword():
