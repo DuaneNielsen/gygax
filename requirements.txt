@@ -7,3 +7,4 @@ pgx
 matplotlib
 orbax-checkpoint
 wandb
+dnd-character
