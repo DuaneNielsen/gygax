@@ -157,6 +157,16 @@ class Weapon:
                 range_normal=weapon.range['normal'],
                 range_long=weapon.range['long']
             )
+        elif thrown:
+            return Weapon(
+                ability_modifier=ability_bonus,
+                weapon_range=weapon.weapon_range,
+                damage_dice=weapon.damage["damage_dice"],
+                expected_damage=expected_damage,
+                damage_type=damage_type,
+                range_normal=weapon.throw_range['normal'],
+                range_long=weapon.throw_range['long']
+            )
 
 
 @dataclass
@@ -188,6 +198,12 @@ class CharacterExtra(Character):
         self._off_hand = None
         self._two_hand = None
 
+        # for our rules, the weapon used will depend on the slot
+        self._ranged_main_hand = None
+        self._ranged_off_hand = None
+        self._ranged_two_hand = None
+
+
     @property
     def main_hand(self) -> Item:
         return self._main_hand
@@ -195,6 +211,7 @@ class CharacterExtra(Character):
     @main_hand.setter
     def main_hand(self, item):
         weapon_properties = set([p['index'] for p in item.properties])
+        assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_main_hand to equip ranged or thrown"
         assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
         self._main_hand = item
         self._two_hand = None
@@ -210,7 +227,9 @@ class CharacterExtra(Character):
             self._two_hand = None
         elif item.equipment_category['index'] == "weapon":
             weapon_properties = set([p['index'] for p in item.properties])
+            assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_off_hand to equip ranged or thrown"
             assert weapon_properties.intersection({'light'}), "only light weapons can be equipped in off hand"
+            assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
             self._off_hand = item
             self._two_hand = None
         else:
@@ -223,7 +242,8 @@ class CharacterExtra(Character):
     @two_hand.setter
     def two_hand(self, item):
         weapon_properties = set([p['index'] for p in item.properties])
-        assert weapon_properties.intersection({'two-handed', 'versatile'}), "weapon was not versatile or two handed"
+        assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_two_hand to equip ranged or thrown"
+        assert {'two-handed', 'versatile'} & weapon_properties, "weapon was not versatile or two handed"
         self._two_hand = item
         self._main_hand = None
         self._off_hand = None
@@ -242,6 +262,72 @@ class CharacterExtra(Character):
         if self.off_hand is not None:
             return Weapon.make(self.off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True)
 
+    @property
+    def ranged_main_hand(self) -> Item:
+        return self._ranged_main_hand
+
+    @ranged_main_hand.setter
+    def ranged_main_hand(self, item):
+        weapon_properties = set([p['index'] for p in item.properties])
+        thrown = {"thrown"} & weapon_properties
+        assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_main_hand"
+        assert not weapon_properties & {'two-handed'}, "two handed weapons must be equipped using two hands"
+        self._ranged_main_hand = item
+        self._ranged_two_hand = None
+
+    @property
+    def ranged_off_hand(self) -> Item:
+        return self._ranged_off_hand
+
+    @ranged_off_hand.setter
+    def ranged_off_hand(self, item):
+        if item.index == 'shield':
+            self._ranged_off_hand = item
+            self._ranged_two_hand = None
+        elif item.equipment_category['index'] == "weapon":
+            weapon_properties = set([p['index'] for p in item.properties])
+            thrown = weapon_properties & {"thrown"}
+            assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_off_hand"
+            assert weapon_properties & {'light'}, "only light weapons can be equipped in off hand"
+            assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
+            self._ranged_off_hand = item
+            self._ranged_two_hand = None
+        else:
+            assert False, "only shields and light weapons can be off hand equipped in the current implementation"
+
+    @property
+    def ranged_two_hand(self):
+        return self._ranged_two_hand
+
+    @ranged_two_hand.setter
+    def ranged_two_hand(self, item):
+        weapon_properties = set([p['index'] for p in item.properties])
+        thrown = weapon_properties.intersection({"thrown"})
+        assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_off_hand"
+        assert weapon_properties.intersection({'two-handed', 'versatile'}), "weapon was not versatile or two handed"
+        self._ranged_two_hand = item
+        self._ranged_main_hand = None
+        self._ranged_off_hand = None
+
+
+    @property
+    def ranged_main_attack(self):
+        if self.ranged_main_hand is not None:
+            thrown = set([p['index'] for p in self.ranged_main_hand.properties]).intersection({"thrown"})
+            return Weapon.make(self.ranged_main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, thrown=thrown)
+        elif self.ranged_two_hand is not None:
+            thrown = set([p['index'] for p in self.ranged_two_hand.properties]).intersection({"thrown"})
+            return Weapon.make(self.ranged_two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True, thrown=thrown)
+        else:
+            return None
+
+    @property
+    def ranged_offhand_attack(self):
+        if self.ranged_off_hand is not None:
+            thrown = set([p['index'] for p in self.ranged_off_hand.properties]).intersection({"thrown"})
+            return Weapon.make(self.ranged_off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True, thrown=thrown)
+        else:
+            return None
 
 def convert_to_character_array(character: CharacterExtra, clazz: type):
     character_dict = dict(character)
@@ -300,8 +386,8 @@ def test_equip_longbow():
         charisma=8
     )
 
-    fighter.two_hand = Item("longbow")
-    weapon = fighter.main_attack
+    fighter.ranged_two_hand = Item("longbow")
+    weapon = fighter.ranged_main_attack
     assert weapon.expected_damage == 4.5 + fighter.ability_modifier.dexterity
     assert weapon.damage_type == DamageType.PIERCING
     assert weapon.ability_modifier == fighter.ability_modifier.dexterity
@@ -379,6 +465,94 @@ def test_equip_two_weapon():
     assert ranger.offhand_attack.finesse == True
     assert ranger.offhand_attack.ability_modifier == -1
     assert ranger.offhand_attack.expected_damage == 1.5
+
+
+def test_equip_thrown_weapon():
+    ranger = CharacterExtra(
+        classs=CLASSES["ranger"],
+        strength=12,
+        dexterity=16,
+        constitution=16,
+        intelligence=8,
+        wisdom=12,
+        charisma=8
+    )
+    ranger.main_hand = Item('handaxe')
+    ranger.off_hand = Item('handaxe')
+    ranger.ranged_main_hand = Item('handaxe')
+    ranger.ranged_off_hand = Item('handaxe')
+
+    assert ranger.main_attack.finesse == False
+    assert ranger.main_attack.ability_modifier == 1
+    assert ranger.main_attack.expected_damage == 4.5
+
+    assert ranger.offhand_attack.finesse == False
+    assert ranger.offhand_attack.ability_modifier == 1
+    assert ranger.offhand_attack.expected_damage == 3.5
+
+    assert ranger.ranged_main_attack.finesse == False
+    assert ranger.ranged_main_attack.ability_modifier == 1
+    assert ranger.ranged_main_attack.expected_damage == 4.5
+
+    assert ranger.ranged_offhand_attack.finesse == False
+    assert ranger.ranged_offhand_attack.ability_modifier == 1
+    assert ranger.ranged_offhand_attack.expected_damage == 3.5
+
+
+def test_melee_assertions():
+    fighter = CharacterExtra(
+        classs=CLASSES["fighter"],
+        strength=16,
+        dexterity=12,
+        constitution=16,
+        intelligence=8,
+        wisdom=12,
+        charisma=8
+    )
+
+    fighter.main_hand = Item('longsword')
+    fighter.two_hand = Item('longsword')
+    fighter.off_hand = Item('dagger')
+    fighter.two_hand = Item('greatsword')
+
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.off_hand = Item('longsword')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.two_hand = Item('longbow')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.main_hand = Item('longbow')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.off_hand = Item('longbow')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.main_hand = Item('greatsword')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.off_hand = Item('greatsword')
+
+    fighter.ranged_two_hand = Item('crossbow-light')
+    fighter.ranged_off_hand = Item('crossbow-hand')
+    fighter.ranged_main_hand = Item('crossbow-hand')
+    fighter.ranged_main_hand = Item('dagger')
+    fighter.ranged_off_hand = Item('dagger')
+
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_two_hand = Item('dagger')
+
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_main_hand = Item('longsword')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_off_hand = Item('longsword')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_two_hand = Item('longsword')
+
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_main_hand = Item('longbow')
+
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_off_hand = Item('crossbow-heavy')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_off_hand = Item('crossbow-light')
+    with pytest.raises(AssertionError) as exc_info:
+        fighter.ranged_main_hand = Item('crossbow-light')
 
 
 
