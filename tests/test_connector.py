@@ -93,11 +93,21 @@ class AbilitiesArray:
 
 
 @chex.dataclass
+class WeaponArray:
+    ability_modifier: int
+    expected_damage: float
+    damage_type: int
+    finesse: bool
+
+
+@chex.dataclass
 class CharacterArray:
     current_hp: jnp.float16
     prof_bonus: jnp.int8
     armor_class: jnp.int8
     ability_modifier: AbilitiesArray
+    main_attack: WeaponArray
+    ranged_main_attack: WeaponArray
 
 
 @dataclass
@@ -112,8 +122,24 @@ class Weapon:
     range_long: int = 5
 
     @staticmethod
-    def make(weapon, strength_ability_bonus, dexterity_ability_bonus, off_hand=False, two_hand=False, thrown=False):
+    def make(weapon: Item,
+             strength_ability_bonus: int,
+             dexterity_ability_bonus:int,
+             off_hand=False, two_hand=False, thrown=False):
+        """
+        returns a dataclass that holds the attack type and damage of the weapon, including ability bonuses
+        where applicable under the rules
+        Args:
+            weapon:
+            strength_ability_bonus:
+            dexterity_ability_bonus:
+            off_hand:
+            two_hand:
+            thrown:
 
+        Returns:
+
+        """
         weapon_properties = set([p['index'] for p in weapon.properties])
         ability_bonus = strength_ability_bonus
         finesse = False
@@ -329,15 +355,28 @@ class CharacterExtra(Character):
         else:
             return None
 
-def convert_to_character_array(character: CharacterExtra, clazz: type):
-    character_dict = dict(character)
+def default_values(clazz: type):
+    kwargs = {}
+    for field_name, field_info in clazz.__dataclass_fields__.items():
+        if issubclass(field_info.type, Container):
+            kwargs[field_name] = default_values(field_info.type)
+        else:
+            kwargs[field_name] = jnp.array(jnp.zeros(1, dtype=field_info.type))
+
+
+def convert_to_character_array(character: CharacterExtra, clazz: type) -> CharacterArray:
+    # character_dict = dict(character)
     kwargs = {}
     for field_name, field_info in clazz.__dataclass_fields__.items():
 
         if issubclass(field_info.type, Container):
-            kwargs[field_name] = convert_to_character_array(character_dict[field_name], field_info.type)
+            field_value = getattr(character, field_name)
+            if field_value is not None:
+                kwargs[field_name] = convert_to_character_array(field_value, field_info.type)
+            else:
+                kwargs[field_name] = default_values(field_info.type)
         else:
-            kwargs[field_name] = jnp.array(character_dict[field_name])
+            kwargs[field_name] = jnp.array(getattr(character, field_name))
             print(f"Field Name: {field_name}, Type: {field_info.type}")
 
     return clazz(**kwargs)
@@ -566,15 +605,21 @@ def test_convert_fighter():
         wisdom=12,
         charisma=8
     )
-    fighter.give_item(Item("chain-mail"))
-    fighter.give_item(Item("longsword"))
-    fighter.give_item(Item("longbow"))
-    fighter.main_hand = 1
-    fighter.off_hand = 2
 
-    assert fighter.off_hand == "longbow"
+    fighter.give_item(Item("chain-mail"))
+    fighter.main_hand = Item("longsword")
+    fighter.ranged_two_hand = Item("longbow")
 
     fighter_jaxxed = convert_to_character_array(fighter, CharacterArray)
     assert fighter_jaxxed.current_hp == 13.
     assert fighter_jaxxed.current_hp.dtype == jnp.int32
     assert fighter_jaxxed.ability_modifier.dexterity == 1
+    assert fighter_jaxxed.main_attack.finesse == False
+    assert fighter_jaxxed.main_attack.expected_damage == 7.5
+    assert fighter_jaxxed.main_attack.ability_modifier == 3
+    assert fighter_jaxxed.main_attack.damage_type == DamageType.SLASHING
+    assert fighter_jaxxed.ranged_main_attack.finesse == False
+    assert fighter_jaxxed.ranged_main_attack.ability_modifier == 1
+    assert fighter_jaxxed.ranged_main_attack.expected_damage == 5.5
+    assert fighter_jaxxed.ranged_main_attack.damage_type == DamageType.PIERCING
+
