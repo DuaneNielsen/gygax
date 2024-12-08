@@ -235,6 +235,25 @@ def init(party: Dict[str, Dict[str, CharacterExtra]]):
 debug = True
 
 
+def step_to_str(source:Character, target:Character, weaponspell:ActionArray, damage:jnp.float16):
+    source_name = JaxStringArray.uint8_array_to_str(source.name)
+    target_name = JaxStringArray.uint8_array_to_str(target.name)
+    action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
+    damage = np.array(jax.device_get(damage))
+    hitroll_type = weaponspell.hitroll_type.item()
+
+    if hitroll_type in {HitrollType.MELEE, HitrollType.FINESSE}:
+        return f'{source_name} hit {target_name} with {action_name} for {damage}'
+    elif hitroll_type == HitrollType.SPELL:
+        return f'{source_name} cast {action_name} on {target_name} for {damage}'
+    elif hitroll_type == HitrollType.RANGED:
+        return f'{source_name} shot {target_name} with {action_name} for {damage}'
+
+
+def print_step(*args):
+    print(step_to_str(*args))
+
+
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos)
     source = jax.tree.map(lambda x: x[*action.source], state.character)
@@ -256,13 +275,6 @@ def step(state: State, action: Array):
     state.character.hp = state.character.hp.at[*action.target].set(state.character.hp[*action.target] - damage)
 
     if debug:
-        def print_step(source, target, weaponspell, damage):
-            source_name = JaxStringArray.uint8_array_to_str(source.name)
-            target_name = JaxStringArray.uint8_array_to_str(target.name)
-            action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
-            damage = np.array(jax.device_get(damage))
-            print(f'{source_name}, {action_name}, {target_name}, {damage}')
-
         jax.debug.callback(print_step, source, target, weaponspell, damage)
 
     return state
