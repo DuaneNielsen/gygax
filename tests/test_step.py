@@ -17,6 +17,7 @@ def exp_dmg(state: State, next_state: State, action):
 
 def test_character():
     fighter = CharacterExtra(
+        name='pikachu',
         classs=CLASSES["fighter"],
         strength=16,
         dexterity=12,
@@ -28,6 +29,7 @@ def test_character():
     fighter.armor = Item('chain-mail')
     fighter.off_hand = Item('shield')
     pikachu = convert(fighter, Character)
+    assert JaxStringArray.uint8_array_to_str(pikachu.name) == 'pikachu'
     assert pikachu.hp.dtype == jnp.float16
     assert jnp.allclose(pikachu.hp, 13)
     assert pikachu.ac == 18
@@ -170,7 +172,7 @@ def test_init(party):
         [9, 8, 11, 13],
     ]))
     name = JaxStringArray.uint8_array_to_str(state.character.name[0, 0])
-    assert name.strip() == 'wyll'
+    assert name == 'wyll'
 
 
 def test_longsword(party):

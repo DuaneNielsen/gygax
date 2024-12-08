@@ -12,7 +12,7 @@ from constants import HitrollType, N_PLAYERS, N_CHARACTERS
 from dnd5e import ActionTuple, decode_action
 from pgx.core import Array
 from character import JaxStringArray
-
+import numpy as np
 
 class Ability(IntEnum):
     STR = 0
@@ -256,9 +256,13 @@ def step(state: State, action: Array):
     state.character.hp = state.character.hp.at[*action.target].set(state.character.hp[*action.target] - damage)
 
     if debug:
-        source_name = JaxStringArray.uint8_array_to_str(source.name)
-        target_name = JaxStringArray.uint8_array_to_str(target.name)
-        action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
-        print(f'{source_name}, {action_name}, {target_name}')
+        def print_step(source, target, weaponspell, damage):
+            source_name = JaxStringArray.uint8_array_to_str(source.name)
+            target_name = JaxStringArray.uint8_array_to_str(target.name)
+            action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
+            damage = np.array(jax.device_get(damage))
+            print(f'{source_name}, {action_name}, {target_name}, {damage}')
+
+        jax.debug.callback(print_step, source, target, weaponspell, damage)
 
     return state
