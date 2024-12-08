@@ -16,6 +16,30 @@ import jax
 import numpy as np
 
 
+def fix_length(text: str, target_length: int, fill_char=" ") -> str:
+    if len(text) > target_length:
+        return text[:target_length]
+    return text.ljust(target_length, fill_char)
+
+
+class JaxStringArray:
+    """
+    A class to represent strings in jax
+    """
+
+    @staticmethod
+    def str_to_uint8_array(text: str):
+        text = fix_length(text, 20)
+        # Convert string to bytes, then to uint8 array
+        return jnp.array(list(text.encode('utf-8')), dtype=jnp.uint8)
+
+    @staticmethod
+    def uint8_array_to_str(arr):
+        # Convert uint8 array to bytes, then to string
+        arr_cpu = np.asarray(arr)
+        return bytes(arr_cpu).decode('utf-8').strip()
+
+
 class WeaponRange(StrEnum):
     MELEE = 'Melee'
     RANGED = 'Ranged'
@@ -58,10 +82,10 @@ AC_LOWER = 5
 AC_UPPER = 20
 PROF_BONUS_LOWER = 0
 PROF_BONUS_UPPER = 6
-ABILITY_MODIFIER_LOWER=-5
-ABILITY_MODIFIER_UPPER=10
-CONDITION_STACKS_UPPER=5
-ACTION_RESOURCES_UPPER=5
+ABILITY_MODIFIER_LOWER = -5
+ABILITY_MODIFIER_UPPER = 10
+CONDITION_STACKS_UPPER = 5
+ACTION_RESOURCES_UPPER = 5
 DAMAGE_UPPER = 20
 
 AbilityModCumBin = CumBinType('AbilityModCumBin', (), {}, upper=ABILITY_MODIFIER_UPPER, lower=ABILITY_MODIFIER_LOWER)
@@ -71,6 +95,7 @@ ArmorClassCumBin = CumBinType('AbilityModCumBin', (), {}, upper=AC_UPPER, lower=
 HitpointsCumBin = CumBinType('AbilityModCumBin', (), {}, upper=HP_UPPER, lower=HP_LOWER)
 DamageTypeOneHot = OneHotType('DamageTypeOneHot', (), {}, n_clessas=len(DamageType))
 CharacterClassOneHot = OneHotType('CharacterClassOneHot', (), {}, n_clessas=len(constants.CharacterClass))
+
 
 @chex.dataclass
 class AbilityModifierObservation:
@@ -283,7 +308,7 @@ class CharacterExtra(Character):
         bonus_saves = set(self.saving_throws)
         for i, save in enumerate(['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']):
             if save in bonus_saves:
-               save_bonus[i] = 1
+                save_bonus[i] = 1
         return save_bonus
 
     @property
@@ -487,6 +512,7 @@ def default_values(clazz: type):
 
 
 from typing import TypeVar
+
 C = TypeVar('C')
 
 
@@ -500,6 +526,8 @@ def convert(character: CharacterExtra, clazz: C) -> C:
                 kwargs[field_name] = convert(field_value, field_info.type)
             else:
                 kwargs[field_name] = default_values(field_info.type)
+        elif issubclass(field_info.type, JaxStringArray):
+            kwargs[field_name] = JaxStringArray.str_to_uint8_array(getattr(character, field_name))
         else:
             kwargs[field_name] = jnp.array(getattr(character, field_name), dtype=field_info.type)
             # print(f"Field Name: {field_name}, Type: {field_info.type}")
@@ -510,29 +538,23 @@ def convert(character: CharacterExtra, clazz: C) -> C:
 from typing import Tuple, Dict, List
 
 
-def stack_party(party: Dict[str, Dict[str, CharacterExtra]], clazz: C) -> Tuple[List[List[str]], C]:
+def stack_party(party: Dict[str, List[CharacterExtra]], clazz: C) -> C:
     """
     Converts a next dict of CharactersExtras into a character array
     Args:
         {
-            Party.PC: {'fizban': wizard, 'jimmy': rogue, 'goldmoon': cleric, 'riverwind': fighter},
-            Party.NPC: {'raistlin': wizard, 'joffrey': rogue, 'clarion': cleric, 'pikachu': fighter}
+            Party.PC: [fizban, jimmy, goldmoon, riverwind],
+            Party.NPC: [raistlin, joffrey, clarion, pikachu]
         }
 
         where each value is a CharacterExtra
-    Returns: names, character array
+    Returns: converted to the parameterized class
 
     """
 
-    names = [
-        list(party[Party.PC].keys()),
-        list(party[Party.NPC].keys())
-    ]
-    names = np.array(names)
-
     party = [
-        list(party[Party.PC].values()),
-        list(party[Party.NPC].values())
+        party[Party.PC],
+        party[Party.NPC]
     ]
 
     jax_party = jax.tree.map(partial(convert, clazz=clazz), party)
@@ -543,4 +565,4 @@ def stack_party(party: Dict[str, Dict[str, CharacterExtra]], clazz: C) -> Tuple[
     parties = []
     for i in range(2):
         parties += [jax.tree.map(stack, *jax_party[i])]
-    return names, jax.tree.map(stack, *parties)
+    return jax.tree.map(stack, *parties)

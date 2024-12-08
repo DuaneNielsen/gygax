@@ -1,6 +1,6 @@
 from step import init, step, State, action_lookup, Character
 from dnd5e import encode_action, ActionTuple, decode_action
-from character import CharacterExtra, convert
+from character import CharacterExtra, convert, JaxStringArray
 from dnd_character import CLASSES
 from dnd_character.equipment import Item
 import jax
@@ -39,7 +39,8 @@ def test_character():
 
 @pytest.fixture
 def party():
-    fighter = CharacterExtra(
+    riverwind = CharacterExtra(
+        name='riverwind',
         classs=CLASSES["fighter"],
         strength=16,
         dexterity=12,
@@ -48,12 +49,28 @@ def party():
         wisdom=12,
         charisma=8
     )
-    fighter.armor = Item('chain-mail')
-    fighter.main_hand = Item('longsword')
-    fighter.off_hand = Item('shield')
-    fighter.ranged_two_hand = Item('shortbow')
+    riverwind.armor = Item('chain-mail')
+    riverwind.main_hand = Item('longsword')
+    riverwind.off_hand = Item('shield')
+    riverwind.ranged_two_hand = Item('shortbow')
 
-    cleric = CharacterExtra(
+    pikachu = CharacterExtra(
+        name='pikachu',
+        classs=CLASSES["fighter"],
+        strength=16,
+        dexterity=12,
+        constitution=16,
+        intelligence=8,
+        wisdom=12,
+        charisma=8
+    )
+    pikachu.armor = Item('chain-mail')
+    pikachu.main_hand = Item('longsword')
+    pikachu.off_hand = Item('shield')
+    pikachu.ranged_two_hand = Item('shortbow')
+
+    goldmoon = CharacterExtra(
+        name='goldmoon',
         classs=CLASSES["cleric"],
         strength=10,
         dexterity=12,
@@ -62,12 +79,28 @@ def party():
         wisdom=15,
         charisma=8
     )
-    cleric.armor = Item('chain-mail')
-    cleric.main_hand = Item('mace')
-    cleric.off_hand = Item('shield')
-    cleric.ranged_two_hand = Item('shortbow')
+    goldmoon.armor = Item('chain-mail')
+    goldmoon.main_hand = Item('mace')
+    goldmoon.off_hand = Item('shield')
+    goldmoon.ranged_two_hand = Item('shortbow')
 
-    rogue = CharacterExtra(
+    clarion = CharacterExtra(
+        name='clarion',
+        classs=CLASSES["cleric"],
+        strength=10,
+        dexterity=12,
+        constitution=16,
+        intelligence=10,
+        wisdom=15,
+        charisma=8
+    )
+    clarion.armor = Item('chain-mail')
+    clarion.main_hand = Item('mace')
+    clarion.off_hand = Item('shield')
+    clarion.ranged_two_hand = Item('shortbow')
+
+    jimmy = CharacterExtra(
+        name='jimmy',
         classs=CLASSES["rogue"],
         strength=10,
         dexterity=18,
@@ -76,11 +109,26 @@ def party():
         wisdom=8,
         charisma=14
     )
-    rogue.armor = Item('leather-armor')
-    rogue.main_hand = Item('dagger')
-    rogue.ranged_two_hand = Item('shortbow')
+    jimmy.armor = Item('leather-armor')
+    jimmy.main_hand = Item('dagger')
+    jimmy.ranged_two_hand = Item('shortbow')
 
-    wizard = CharacterExtra(
+    joffrey = CharacterExtra(
+        name='joffrey',
+        classs=CLASSES["rogue"],
+        strength=10,
+        dexterity=18,
+        constitution=10,
+        intelligence=14,
+        wisdom=8,
+        charisma=14
+    )
+    joffrey.armor = Item('leather-armor')
+    joffrey.main_hand = Item('dagger')
+    joffrey.ranged_two_hand = Item('shortbow')
+
+    raistlin = CharacterExtra(
+        name='raistlin',
         classs=CLASSES["wizard"],
         strength=10,
         dexterity=8,
@@ -89,11 +137,12 @@ def party():
         wisdom=14,
         charisma=8
     )
-    wizard.armor = None
-    wizard.main_hand = Item('dagger')
-    wizard.ranged_two_hand = Item('shortbow')
+    raistlin.armor = None
+    raistlin.main_hand = Item('dagger')
+    raistlin.ranged_two_hand = Item('shortbow')
 
-    warlock = CharacterExtra(
+    wyll = CharacterExtra(
+        name='wyll',
         classs=CLASSES["warlock"],
         strength=10,
         dexterity=8,
@@ -102,13 +151,13 @@ def party():
         wisdom=14,
         charisma=16
     )
-    warlock.armor = Item('leather-armor')
-    warlock.main_hand = Item('dagger')
-    warlock.ranged_two_hand = None
+    wyll.armor = Item('leather-armor')
+    wyll.main_hand = Item('dagger')
+    wyll.ranged_two_hand = None
 
     return {
-        Party.PC: {'wyll': warlock, 'jimmy': rogue, 'goldmoon': cleric, 'riverwind': fighter},
-        Party.NPC: {'raistlin': wizard, 'joffrey': rogue, 'clarion': cleric, 'pikachu': fighter}
+        Party.PC: [wyll, jimmy, goldmoon, riverwind],
+        Party.NPC: [raistlin, joffrey, clarion, pikachu]
     }
 
 
@@ -120,6 +169,8 @@ def test_init(party):
         [11, 8, 11, 13],
         [9, 8, 11, 13],
     ]))
+    name = JaxStringArray.uint8_array_to_str(state.character.name[0, 0])
+    assert name.strip() == 'wyll'
 
 
 def test_longsword(party):

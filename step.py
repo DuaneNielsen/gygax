@@ -11,6 +11,8 @@ from character import CharacterExtra, stack_party
 from constants import HitrollType, N_PLAYERS, N_CHARACTERS
 from dnd5e import ActionTuple, decode_action
 from pgx.core import Array
+from character import JaxStringArray
+
 
 class Ability(IntEnum):
     STR = 0
@@ -37,6 +39,7 @@ class SaveFreq(IntEnum):
 
 @chex.dataclass
 class ActionArray:
+    name: JaxStringArray
     damage: jnp.float16
     damage_type: jnp.int8
     req_hitroll: jnp.bool  #
@@ -154,6 +157,7 @@ action_lookup = {entry.name: i for i, entry in enumerate(action_table)}
 
 def load_action(action: ActionEntry):
     return ActionArray(
+        name=JaxStringArray.str_to_uint8_array(action.name),
         damage=jnp.float16(action.damage),
         damage_type=jnp.int8(action.damage_type),
         req_hitroll=jnp.bool(action.req_hitroll),
@@ -180,6 +184,7 @@ action_table = jax.tree.map(lambda *x: jnp.stack(x), *action_table)
 
 @chex.dataclass
 class Character:
+    name: JaxStringArray
     hp: jnp.float16
     ac: jnp.int8
     prof_bonus: jnp.int8
@@ -211,7 +216,7 @@ class State(pgx.State):
 
 # stub init to help for testing, move to test harness later
 def init(party: Dict[str, Dict[str, CharacterExtra]]):
-    names, characters = stack_party(party, Character)
+    characters = stack_party(party, Character)
     return State(
         character=characters,
         pos=jnp.tile(jnp.arange(N_CHARACTERS, dtype=jnp.uint8), (N_PLAYERS, 1)),
@@ -227,6 +232,8 @@ def init(party: Dict[str, Dict[str, CharacterExtra]]):
 
 # so much for damage, think about conditions and conditional probability of successive saves next
 # advantage on saves and attack rolls
+debug = True
+
 
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos)
@@ -247,5 +254,11 @@ def step(state: State, action: Array):
 
     damage = weaponspell.damage * hitroll_mul * save_mul * target.damage_type_mul[weaponspell.damage_type]
     state.character.hp = state.character.hp.at[*action.target].set(state.character.hp[*action.target] - damage)
+
+    if debug:
+        source_name = JaxStringArray.uint8_array_to_str(source.name)
+        target_name = JaxStringArray.uint8_array_to_str(target.name)
+        action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
+        print(f'{source_name}, {action_name}, {target_name}')
 
     return state
