@@ -130,6 +130,14 @@ def test_longsword(party):
     state = step(state, action)
     assert exp_dmg(prev_state, state, action) == 4.5 * 0.5
 
+def test_eldrich_blast(party):
+    state = init(party)
+    blast = action_lookup['eldrich-blast']
+    action = encode_action(blast, 0, 1, 1)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert exp_dmg(prev_state, state, action) == 5.5 * 10/20
+
 
 def test_vmap(party):
     state = init(party)
@@ -142,18 +150,12 @@ def test_vmap(party):
 
     state = vmap_init(rng_init)
 
-    longsword = action_lookup['longsword']
-    action = encode_action(longsword, 3, 1, 1)
-    action = jnp.repeat(action, 2)
+    longsword = encode_action(action_lookup['longsword'], 3, 1, 1)
+    blast = encode_action(action_lookup['eldrich-blast'], 0, 1, 1)
+    action = jnp.array([longsword, blast])
     prev_state = deepcopy(state)
     state = jax.vmap(step)(state, action)
     assert jax.vmap(exp_dmg)(prev_state, state, action)[0] == 4.5 * 0.5
+    assert jax.vmap(exp_dmg)(prev_state, state, action)[1] == 5.5 * 10/20
 
 
-def test_eldrich_blast(party):
-    state = init(party)
-    longsword = action_lookup['eldrich-blast']
-    action = encode_action(longsword, 0, 1, 1)
-    prev_state = deepcopy(state)
-    state = step(state, action)
-    assert exp_dmg(prev_state, state, action) == 5.0 * 11/20
