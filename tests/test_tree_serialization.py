@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from jax import numpy as jnp
 from jax.numpy import array_equal
 from tree_serialization import cum_bins, get_metadata, \
-    flatten_pytree_batched, unflatten_pytree_batched
+    flatten_pytree_batched, unflatten_pytree_batched, CumBinType
 import jax
 
 def test_3d_input():
@@ -141,3 +141,91 @@ def test_vmapped_flatten_unflatten():
 
     print("All tests passed!")
     return flat_arrays, reconstructed
+
+
+@pytest.fixture
+def cumbin_types():
+    CumBin10 = CumBinType('CumBin10', (), {}, upper=10)  # 11 bins by default
+    CumBinCustom = CumBinType('CumBinCustom', (), {}, upper=1, lower=0, n_bins=5)  # 5 bins explicitly
+    CumBinNeg = CumBinType('CumBinNeg', (), {}, upper=5, lower=-5)  # 11 bins
+    return CumBin10, CumBinCustom, CumBinNeg
+
+
+class TestCumBinTypeCreation:
+    def test_basic_creation(self):
+        CumBin = CumBinType('CumBin', (), {}, upper=5)
+        assert CumBin.upper == 5
+        assert CumBin.lower == 0
+        assert CumBin.n_bins == 6  # 0-5 inclusive = 6 bins
+
+    def test_custom_bins(self):
+        CumBin = CumBinType('CumBin', (), {}, upper=1, lower=0, n_bins=10)
+        assert CumBin.upper == 1
+        assert CumBin.lower == 0
+        assert CumBin.n_bins == 10
+
+    def test_invalid_creation(self):
+        with pytest.raises(TypeError):
+            CumBinType('CumBin', (), {})
+
+
+class TestInstanceChecking:
+    def test_valid_instance(self, cumbin_types):
+        CumBin10, CumBinCustom, _ = cumbin_types
+        arr = jnp.zeros(11)
+        arr_custom = jnp.zeros(5)
+        assert isinstance(arr, CumBin10)
+        assert isinstance(arr_custom, CumBinCustom)
+
+    def test_wrong_size(self, cumbin_types):
+        CumBin10, _, _ = cumbin_types
+        arr = jnp.zeros(5)
+        assert not isinstance(arr, CumBin10)
+
+    def test_negative_range(self, cumbin_types):
+        _, _, CumBinNeg = cumbin_types
+        arr = jnp.zeros(11)  # -5 to 5 = 11 bins
+        assert isinstance(arr, CumBinNeg)
+
+    def test_non_array_instance(self, cumbin_types):
+        CumBin10, _, _ = cumbin_types
+        assert not isinstance([0] * 11, CumBin10)
+        assert not isinstance(42, CumBin10)
+
+
+class TestSubclassChecking:
+    def test_subclass_relationship(self, cumbin_types):
+        CumBin10, CumBinCustom, _ = cumbin_types
+        assert issubclass(CumBin10, CumBinCustom)
+        assert issubclass(CumBinCustom, CumBin10)
+
+    def test_non_cumbin_subclass(self, cumbin_types):
+        CumBin10, _, _ = cumbin_types
+        assert not issubclass(str, CumBin10)
+        assert not issubclass(type, CumBin10)
+
+
+class TestPropertyAccess:
+    def test_property_immutability(self, cumbin_types):
+        CumBin10, _, _ = cumbin_types
+        with pytest.raises(AttributeError):
+            CumBin10.upper = 20
+        with pytest.raises(AttributeError):
+            CumBin10.lower = -10
+        with pytest.raises(AttributeError):
+            CumBin10.n_bins = 15
+
+    def test_property_access(self, cumbin_types):
+        CumBin10, CumBinCustom, CumBinNeg = cumbin_types
+
+        assert CumBin10.upper == 10
+        assert CumBin10.lower == 0
+        assert CumBin10.n_bins == 11
+
+        assert CumBinCustom.upper == 1
+        assert CumBinCustom.lower == 0
+        assert CumBinCustom.n_bins == 5
+
+        assert CumBinNeg.upper == 5
+        assert CumBinNeg.lower == -5
+        assert CumBinNeg.n_bins == 11

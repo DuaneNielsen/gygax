@@ -3,7 +3,8 @@ from dnd_character import CLASSES
 from dnd_character.equipment import Item
 import jax.numpy as jnp
 
-from connector import WeaponRange, DamageType, CharacterArray, CharacterExtra, convert
+import constants
+from character import WeaponRange, DamageType, CharacterArray, CharacterExtra, convert
 
 
 def test_equip_longsword():
@@ -228,8 +229,10 @@ def test_convert_fighter():
     fighter.ranged_two_hand = Item("longbow")
 
     fighter_jaxxed = convert(fighter, CharacterArray)
+
+    assert fighter_jaxxed.character_class == constants.CharacterClass.FIGHTER
     assert fighter_jaxxed.current_hp == 13.
-    assert fighter_jaxxed.current_hp.dtype == jnp.int32
+    assert fighter_jaxxed.current_hp.dtype == jnp.float16
     assert fighter_jaxxed.ability_modifier.dexterity == 1
     assert fighter_jaxxed.main_attack.finesse == False
     assert fighter_jaxxed.main_attack.expected_damage == 7.5

@@ -1,76 +1,67 @@
-import constants
-from constants import *
-from equipment.armor import armor
-from equipment.weapons import weapons
-from equipment.equipment import empty
+from character import WeaponRange, DamageType, CharacterArray, CharacterExtra, convert
+from dnd_character import CLASSES
+from dnd_character.equipment import Item
+from constants import ConfigItems, Party
 
-fighter = {
-    CharacterSheet.ABILITIES: {
-        Abilities.STR: 16,
-        Abilities.DEX: 12,
-        Abilities.CON: 16,
-        Abilities.INT: 8,
-        Abilities.WIS: 12,
-        Abilities.CHA: 8
-    },
-    CharacterSheet.HITPOINTS: 13,
-    CharacterSheet.ARMOR: armor['chain-mail'],
-    CharacterSheet.MAIN_HAND: weapons['longsword'],
-    CharacterSheet.OFF_HAND: armor['shield'],
-    CharacterSheet.RANGED_WEAPON: weapons['crossbow-light']
-}
+fighter = CharacterExtra(
+    classs=CLASSES["fighter"],
+    strength=16,
+    dexterity=12,
+    constitution=16,
+    intelligence=8,
+    wisdom=12,
+    charisma=8
+)
+fighter.armor = Item('chain-mail')
+fighter.main_hand = Item('longsword')
+fighter.off_hand = Item('shield')
+fighter.ranged_two_hand = Item('shortbow')
 
-cleric = {
-    CharacterSheet.ABILITIES: {
-        Abilities.STR: 10,
-        Abilities.DEX: 12,
-        Abilities.CON: 16,
-        Abilities.INT: 10,
-        Abilities.WIS: 16,
-        Abilities.CHA: 8
-    },
-    CharacterSheet.HITPOINTS: 11,
-    CharacterSheet.ARMOR: armor['chain-mail'],
-    CharacterSheet.OFF_HAND: armor['shield'],
-    CharacterSheet.MAIN_HAND: weapons['mace'],
-    CharacterSheet.RANGED_WEAPON: weapons['crossbow-light']
-}
+cleric = CharacterExtra(
+    classs=CLASSES["cleric"],
+    strength=10,
+    dexterity=12,
+    constitution=16,
+    intelligence=10,
+    wisdom=15,
+    charisma=8
+)
+cleric.armor = Item('chain-mail')
+cleric.main_hand = Item('mace')
+cleric.off_hand = Item('shield')
+cleric.ranged_two_hand = Item('shortbow')
 
-rogue = {
-    CharacterSheet.ABILITIES: {
-        Abilities.STR: 10,
-        Abilities.DEX: 16,
-        Abilities.CON: 10,
-        Abilities.INT: 16,
-        Abilities.WIS: 8,
-        Abilities.CHA: 14
-    },
-    CharacterSheet.HITPOINTS: 8,
-    CharacterSheet.ARMOR: armor['leather'],
-    CharacterSheet.OFF_HAND: empty,
-    CharacterSheet.MAIN_HAND: weapons['rapier'],
-    CharacterSheet.RANGED_WEAPON: weapons['shortbow']
-}
 
-wizard = {
-    CharacterSheet.ABILITIES: {
-        Abilities.STR: 10,
-        Abilities.DEX: 8,
-        Abilities.CON: 16,
-        Abilities.INT: 10,
-        Abilities.WIS: 16,
-        Abilities.CHA: 8
-    },
-    CharacterSheet.HITPOINTS: 6,
-    CharacterSheet.ARMOR: armor['cloth'],
-    CharacterSheet.OFF_HAND: empty,
-    CharacterSheet.MAIN_HAND: weapons['rapier'],
-    CharacterSheet.RANGED_WEAPON: weapons['shortbow']
-}
+rogue = CharacterExtra(
+    classs=CLASSES["rogue"],
+    strength=10,
+    dexterity=16,
+    constitution=10,
+    intelligence=16,
+    wisdom=8,
+    charisma=14
+)
+rogue.armor = Item('leather-armor')
+rogue.main_hand = Item('dagger')
+rogue.ranged_two_hand = Item('shortbow')
+
+wizard = CharacterExtra(
+    classs=CLASSES["wizard"],
+    strength=10,
+    dexterity=8,
+    constitution=16,
+    intelligence=16,
+    wisdom=14,
+    charisma=8
+)
+wizard.armor = None
+wizard.main_hand = Item('dagger')
+wizard.ranged_two_hand = Item('shortbow')
+
 
 default_config = {
     ConfigItems.PARTY: {
-        constants.Party.PC: {'fizban': wizard, 'jimmy': rogue, 'goldmoon': cleric, 'riverwind': fighter},
-        constants.Party.NPC: {'raistlin': wizard, 'joffrey': rogue, 'clarion': cleric, 'pikachu': fighter}
+        Party.PC: {'fizban': wizard, 'jimmy': rogue, 'goldmoon': cleric, 'riverwind': fighter},
+        Party.NPC: {'raistlin': wizard, 'joffrey': rogue, 'clarion': cleric, 'pikachu': fighter}
     }
 }

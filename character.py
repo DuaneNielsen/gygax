@@ -2,17 +2,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Container
 
+import constants
+from tree_serialization import CumBinType, OneHotType
 import chex
 from dnd_character import Character
 from dnd_character.SRD import SRD
 from dnd_character.equipment import _Item, Item
 from jax import numpy as jnp
-from constants import DamageType
+from constants import DamageType, Party
 import dice
-
-map_damage_type = {}
-for damage_type in DamageType:
-    map_damage_type[damage_type.name.lower()] = damage_type
+from functools import partial
+import jax
+import numpy as np
 
 
 class WeaponRange(StrEnum):
@@ -50,23 +51,76 @@ class AbilitiesArray:
     charisma: jnp.int8
 
 
+# scaling constants for observations
+HP_LOWER = 0  # dont worry about negative hitpoints for now
+HP_UPPER = 20
+AC_LOWER = 5
+AC_UPPER = 20
+PROF_BONUS_LOWER = 0
+PROF_BONUS_UPPER = 6
+ABILITY_MODIFIER_LOWER=-5
+ABILITY_MODIFIER_UPPER=10
+CONDITION_STACKS_UPPER=5
+ACTION_RESOURCES_UPPER=5
+DAMAGE_UPPER = 20
+
+AbilityModCumBin = CumBinType('AbilityModCumBin', (), {}, upper=ABILITY_MODIFIER_UPPER, lower=ABILITY_MODIFIER_LOWER)
+DamageCumBin = CumBinType('AbilityModCumBin', (), {}, upper=DAMAGE_UPPER)
+ProfBonusCumBin = CumBinType('AbilityModCumBin', (), {}, upper=PROF_BONUS_UPPER, lower=PROF_BONUS_LOWER)
+ArmorClassCumBin = CumBinType('AbilityModCumBin', (), {}, upper=AC_UPPER, lower=AC_LOWER)
+HitpointsCumBin = CumBinType('AbilityModCumBin', (), {}, upper=HP_UPPER, lower=HP_LOWER)
+DamageTypeOneHot = OneHotType('DamageTypeOneHot', (), {}, n_clessas=len(DamageType))
+CharacterClassOneHot = OneHotType('CharacterClassOneHot', (), {}, n_clessas=len(constants.CharacterClass))
+
+@chex.dataclass
+class AbilityModifierObservation:
+    strength: AbilityModCumBin
+    dexterity: AbilityModCumBin
+    constitution: AbilityModCumBin
+    intelligence: AbilityModCumBin
+    wisdom: AbilityModCumBin
+    charisma: AbilityModCumBin
+
+
 @chex.dataclass
 class WeaponArray:
-    ability_modifier: int
-    expected_damage: float
-    damage_type: int
-    finesse: bool
+    ability_modifier: jnp.int8
+    expected_damage: jnp.float32
+    damage_type: jnp.int8
+    finesse: jnp.bool
+
+
+@chex.dataclass
+class WeaponObservation:
+    ability_modifier: AbilityModCumBin
+    expected_damage: DamageCumBin
+    damage_type: DamageTypeOneHot
+    finesse: jnp.bool
 
 
 @chex.dataclass
 class CharacterArray:
+    character_class: jnp.int8
     armor_class: jnp.int8
     current_hp: jnp.float16
+    max_hp: jnp.float16
     prof_bonus: jnp.int8
-    armor_class: jnp.int8
     ability_modifier: AbilitiesArray
     main_attack: WeaponArray
     ranged_main_attack: WeaponArray
+    dead: jnp.bool
+
+
+@chex.dataclass
+class CharacterObservation:
+    character_class: CharacterClassOneHot
+    armor_class: ArmorClassCumBin
+    current_hp: HitpointsCumBin
+    prof_bonus: ProfBonusCumBin
+    ability_modifier: AbilityModifierObservation
+    main_attack: WeaponObservation
+    ranged_main_attack: WeaponObservation
+    dead: bool
 
 
 @dataclass
@@ -83,7 +137,7 @@ class Attack:
     @staticmethod
     def make(weapon: Item,
              strength_ability_bonus: int,
-             dexterity_ability_bonus:int,
+             dexterity_ability_bonus: int,
              off_hand=False, two_hand=False, thrown=False):
         """
         returns a dataclass that holds the attack type and damage of the weapon, including ability bonuses
@@ -115,7 +169,7 @@ class Attack:
             ability_bonus = min(ability_bonus, 0) if off_hand else ability_bonus
             damage_dice = damage["damage_dice"]
             expected_damage = max(dice.expected_roll(damage_dice) + ability_bonus, 0)
-            damage_type = map_damage_type[damage['damage_type']['index']]
+            damage_type = DamageType[damage['damage_type']['index'].upper()]
             return damage_dice, expected_damage, damage_type
 
         damage_dice, expected_damage, damage_type = get_damage(weapon.damage, ability_bonus, off_hand)
@@ -190,6 +244,62 @@ class CharacterExtra(Character):
         self._armor = None
 
     @property
+    def hp(self):
+        return self.current_hp
+
+    @property
+    def ability_mods(self):
+        return [
+            self.ability_modifier.strength,
+            self.ability_modifier.dexterity,
+            self.ability_modifier.constitution,
+            self.ability_modifier.intelligence,
+            self.ability_modifier.wisdom,
+            self.ability_modifier.charisma
+        ]
+
+    @property
+    def ac(self):
+        return self.armor_class
+
+    @property
+    def spell_ability_mod(self):
+        spell_ability_mod = self.ability_modifier.charisma
+        if self.character_class == constants.CharacterClass.CLERIC:
+            spell_ability_mod = self.ability_modifier.wisdom
+        if self.character_class == constants.CharacterClass.DRUID:
+            spell_ability_mod = self.ability_modifier.wisdom
+        if self.character_class == constants.CharacterClass.MONK:
+            spell_ability_mod = self.ability_modifier.wisdom
+        if self.character_class == constants.CharacterClass.RANGER:
+            spell_ability_mod = self.ability_modifier.wisdom
+        if self.character_class == constants.CharacterClass.WIZARD:
+            spell_ability_mod = self.ability_modifier.intelligence
+        return spell_ability_mod
+
+    @property
+    def save_bonus(self):
+        save_bonus = [0] * 6
+        bonus_saves = set(self.saving_throws)
+        for i, save in enumerate(['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']):
+            if save in bonus_saves:
+               save_bonus[i] = 1
+        return save_bonus
+
+    @property
+    def attack_ability_mods(self):
+        attack_ability_mods = [None] * len(constants.HitrollType)
+        attack_ability_mods[constants.HitrollType.SPELL] = self.spell_ability_mod
+        attack_ability_mods[constants.HitrollType.MELEE] = self.ability_modifier.strength
+        attack_ability_mods[constants.HitrollType.RANGED] = self.ability_modifier.dexterity
+        attack_ability_mods[constants.HitrollType.FINESSE] = self.ability_modifier.dexterity
+        return attack_ability_mods
+
+    @property
+    def character_class(self):
+        return constants.CharacterClass[self.class_name.upper()]
+
+    @property
     def armor(self):
         return self._armor
 
@@ -202,13 +312,12 @@ class CharacterExtra(Character):
         assert armor.armor_category != 'Shield', "shields should be equipped in the off_hand slot"
         self._armor = armor
 
-
     @property
     def armor_class(self):
         base_armor, dex_bonus, shield = 10, True, 0
         if self._armor is not None:
             base_armor = self._armor.armor_class['base']
-            dex_bonus =  self._armor.armor_class['dex_bonus']
+            dex_bonus = self._armor.armor_class['dex_bonus']
 
         if self.off_hand is not None:
             if self._off_hand.armor_class is not None:
@@ -222,6 +331,10 @@ class CharacterExtra(Character):
         pass
 
     @property
+    def damage_type_mul(self):
+        return [1.] * len(DamageType)
+
+    @property
     def main_hand(self) -> Item:
         return self._main_hand
 
@@ -230,7 +343,8 @@ class CharacterExtra(Character):
         if item is not None:
             weapon_properties = set([p['index'] for p in item.properties])
             assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_main_hand to equip ranged or thrown"
-            assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
+            assert not weapon_properties.intersection(
+                {'two-handed'}), "two handed weapons must be equipped using two hands"
             self._main_hand = item
             self._two_hand = None
         else:
@@ -251,7 +365,8 @@ class CharacterExtra(Character):
                 weapon_properties = set([p['index'] for p in item.properties])
                 assert item.weapon_range == "Melee", "must equip melee weapon, use ranged_off_hand to equip ranged or thrown"
                 assert weapon_properties.intersection({'light'}), "only light weapons can be equipped in off hand"
-                assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
+                assert not weapon_properties.intersection(
+                    {'two-handed'}), "two handed weapons must be equipped using two hands"
                 self._off_hand = item
                 self._two_hand = None
             else:
@@ -278,14 +393,16 @@ class CharacterExtra(Character):
         if self.main_hand is not None:
             return Attack.make(self.main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity)
         elif self.two_hand is not None:
-            return Attack.make(self.two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True)
+            return Attack.make(self.two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity,
+                               two_hand=True)
         else:
             return Attack.make(unarmed, self.ability_modifier.strength, self.ability_modifier.dexterity)
 
     @property
     def offhand_attack(self):
         if self.off_hand is not None:
-            return Attack.make(self.off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True)
+            return Attack.make(self.off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity,
+                               off_hand=True)
 
     @property
     def ranged_main_hand(self) -> Item:
@@ -293,10 +410,11 @@ class CharacterExtra(Character):
 
     @ranged_main_hand.setter
     def ranged_main_hand(self, item):
-        weapon_properties = set([p['index'] for p in item.properties])
-        thrown = {"thrown"} & weapon_properties
-        assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_main_hand"
-        assert not weapon_properties & {'two-handed'}, "two handed weapons must be equipped using two hands"
+        if item is not None:
+            weapon_properties = set([p['index'] for p in item.properties])
+            thrown = {"thrown"} & weapon_properties
+            assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_main_hand"
+            assert not weapon_properties & {'two-handed'}, "two handed weapons must be equipped using two hands"
         self._ranged_main_hand = item
         self._ranged_two_hand = None
 
@@ -314,7 +432,8 @@ class CharacterExtra(Character):
             thrown = weapon_properties & {"thrown"}
             assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_off_hand"
             assert weapon_properties & {'light'}, "only light weapons can be equipped in off hand"
-            assert not weapon_properties.intersection({'two-handed'}), "two handed weapons must be equipped using two hands"
+            assert not weapon_properties.intersection(
+                {'two-handed'}), "two handed weapons must be equipped using two hands"
             self._ranged_off_hand = item
             self._ranged_two_hand = None
         else:
@@ -326,23 +445,25 @@ class CharacterExtra(Character):
 
     @ranged_two_hand.setter
     def ranged_two_hand(self, item):
-        weapon_properties = set([p['index'] for p in item.properties])
-        thrown = weapon_properties.intersection({"thrown"})
-        assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_off_hand"
-        assert weapon_properties.intersection({'two-handed', 'versatile'}), "weapon was not versatile or two handed"
+        if item is not None:
+            weapon_properties = set([p['index'] for p in item.properties])
+            thrown = weapon_properties.intersection({"thrown"})
+            assert item.weapon_range == "Ranged" or thrown, "can only equip ranged or thrown in ranged_off_hand"
+            assert weapon_properties.intersection({'two-handed', 'versatile'}), "weapon was not versatile or two handed"
         self._ranged_two_hand = item
         self._ranged_main_hand = None
         self._ranged_off_hand = None
-
 
     @property
     def ranged_main_attack(self):
         if self.ranged_main_hand is not None:
             thrown = set([p['index'] for p in self.ranged_main_hand.properties]).intersection({"thrown"})
-            return Attack.make(self.ranged_main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, thrown=thrown)
+            return Attack.make(self.ranged_main_hand, self.ability_modifier.strength, self.ability_modifier.dexterity,
+                               thrown=thrown)
         elif self.ranged_two_hand is not None:
             thrown = set([p['index'] for p in self.ranged_two_hand.properties]).intersection({"thrown"})
-            return Attack.make(self.ranged_two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, two_hand=True, thrown=thrown)
+            return Attack.make(self.ranged_two_hand, self.ability_modifier.strength, self.ability_modifier.dexterity,
+                               two_hand=True, thrown=thrown)
         else:
             return None
 
@@ -350,7 +471,8 @@ class CharacterExtra(Character):
     def ranged_offhand_attack(self):
         if self.ranged_off_hand is not None:
             thrown = set([p['index'] for p in self.ranged_off_hand.properties]).intersection({"thrown"})
-            return Attack.make(self.ranged_off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity, off_hand=True, thrown=thrown)
+            return Attack.make(self.ranged_off_hand, self.ability_modifier.strength, self.ability_modifier.dexterity,
+                               off_hand=True, thrown=thrown)
         else:
             return None
 
@@ -364,7 +486,11 @@ def default_values(clazz: type):
             kwargs[field_name] = jnp.array(jnp.zeros(1, dtype=field_info.type))
 
 
-def convert(character: CharacterExtra, clazz: type) -> CharacterArray:
+from typing import TypeVar
+C = TypeVar('C')
+
+
+def convert(character: CharacterExtra, clazz: C) -> C:
     kwargs = {}
     for field_name, field_info in clazz.__dataclass_fields__.items():
 
@@ -375,7 +501,46 @@ def convert(character: CharacterExtra, clazz: type) -> CharacterArray:
             else:
                 kwargs[field_name] = default_values(field_info.type)
         else:
-            kwargs[field_name] = jnp.array(getattr(character, field_name))
-            print(f"Field Name: {field_name}, Type: {field_info.type}")
+            kwargs[field_name] = jnp.array(getattr(character, field_name), dtype=field_info.type)
+            # print(f"Field Name: {field_name}, Type: {field_info.type}")
 
     return clazz(**kwargs)
+
+
+from typing import Tuple, Dict, List
+
+
+def stack_party(party: Dict[str, Dict[str, CharacterExtra]], clazz: C) -> Tuple[List[List[str]], C]:
+    """
+    Converts a next dict of CharactersExtras into a character array
+    Args:
+        {
+            Party.PC: {'fizban': wizard, 'jimmy': rogue, 'goldmoon': cleric, 'riverwind': fighter},
+            Party.NPC: {'raistlin': wizard, 'joffrey': rogue, 'clarion': cleric, 'pikachu': fighter}
+        }
+
+        where each value is a CharacterExtra
+    Returns: names, character array
+
+    """
+
+    names = [
+        list(party[Party.PC].keys()),
+        list(party[Party.NPC].keys())
+    ]
+    names = np.array(names)
+
+    party = [
+        list(party[Party.PC].values()),
+        list(party[Party.NPC].values())
+    ]
+
+    jax_party = jax.tree.map(partial(convert, clazz=clazz), party)
+
+    def stack(*args):
+        return jnp.stack(args)
+
+    parties = []
+    for i in range(2):
+        parties += [jax.tree.map(stack, *jax_party[i])]
+    return names, jax.tree.map(stack, *parties)
