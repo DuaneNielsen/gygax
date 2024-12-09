@@ -41,6 +41,11 @@ class Abilities(IntEnum):
 
 N_ABILITIES = len(Abilities)
 
+
+class SaveFreq(IntEnum):
+    END_TARGET_TURN = 0
+
+
 class ConfigItems(StrEnum):
     PARTY = auto()
 
@@ -62,6 +67,10 @@ class CharacterSheet(StrEnum):
     MAIN_HAND = auto()
     OFF_HAND = auto()
     RANGED_WEAPON = auto()
+
+
+# the number of effects that can be active on a character
+N_EFFECTS = 8
 
 
 def create_sorted_enum(enum_name: str, keys: List[str]) -> type[IntEnum]:

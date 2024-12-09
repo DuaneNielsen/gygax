@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Container
+from typing import Container, List
 
 import constants
 from tree_serialization import CumBinType, OneHotType
@@ -14,6 +14,31 @@ import dice
 from functools import partial
 import jax
 import numpy as np
+import dataclasses
+from constants import HitrollType, Conditions, Abilities, SaveFreq
+
+
+@dataclasses.dataclass
+class ActionEntry:
+    name: str = ''
+    damage: float = 0.
+    damage_type: int = DamageType.FORCE
+    req_hitroll: bool = False
+    hitroll_type: HitrollType = HitrollType.SPELL
+    ability_mod_damage: bool = False
+    inflicts_condition: bool = False
+    condition: Conditions = Conditions.POISONED
+    condition_duration: int = 0  # rounds ( 6 seconds )
+    can_save: bool = False
+    save: Abilities = Abilities.CON
+    use_save_dc: bool = False
+    save_dc: int = 0
+    save_mod: float = 0.
+    cum_save: float = 0.
+    save_freq: SaveFreq = SaveFreq.END_TARGET_TURN
+    bonus_attacks: int = 0
+    bonus_spell_attacks: int = 0
+    recurring_damage: float = 0.
 
 
 def fix_length(text: str, target_length: int, fill_char=" ") -> str:
@@ -268,6 +293,9 @@ class CharacterExtra(Character):
         self._ranged_two_hand = None
         self._armor = None
 
+        self.conditions = [False] * len(constants.Conditions)
+        self.effects = [ActionEntry()] * constants.N_EFFECTS
+
     @property
     def hp(self):
         return self.current_hp
@@ -501,19 +529,29 @@ class CharacterExtra(Character):
         else:
             return None
 
+    # @property
+    # def conditions(self):
+    #     return self._conditions
+    #
+    # @conditions.setter
+    # def conditions(self, item : List[Conditions]):
+    #     self._conditions = item
 
-def default_values(clazz: type):
+from typing import TypeVar
+
+C = TypeVar('C')
+
+
+def default_values(clazz: C) -> C:
     kwargs = {}
     for field_name, field_info in clazz.__dataclass_fields__.items():
         if issubclass(field_info.type, Container):
             kwargs[field_name] = default_values(field_info.type)
         else:
             kwargs[field_name] = jnp.array(jnp.zeros(1, dtype=field_info.type))
+    return clazz(**kwargs)
 
 
-from typing import TypeVar
-
-C = TypeVar('C')
 
 
 def convert(character: CharacterExtra, clazz: C) -> C:
@@ -527,10 +565,18 @@ def convert(character: CharacterExtra, clazz: C) -> C:
             else:
                 kwargs[field_name] = default_values(field_info.type)
         elif issubclass(field_info.type, JaxStringArray):
-            kwargs[field_name] = JaxStringArray.str_to_uint8_array(getattr(character, field_name))
+            if type(character) is list:
+                expanded_arrays = [JaxStringArray.str_to_uint8_array(getattr(s, field_name)) for s in character]
+                kwargs[field_name] = jnp.stack(expanded_arrays)
+            else:
+                field_value = getattr(character, field_name)
+                kwargs[field_name] = JaxStringArray.str_to_uint8_array(field_value)
         else:
-            kwargs[field_name] = jnp.array(getattr(character, field_name), dtype=field_info.type)
-            # print(f"Field Name: {field_name}, Type: {field_info.type}")
+            if type(character) is list:
+                expanded_arrays = [getattr(x, field_name) for x in character]
+                kwargs[field_name] = jnp.array(expanded_arrays, dtype=field_info.type)
+            else:
+                kwargs[field_name] = jnp.array(getattr(character, field_name), dtype=field_info.type)
 
     return clazz(**kwargs)
 

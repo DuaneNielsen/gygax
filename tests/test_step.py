@@ -1,4 +1,5 @@
-from step import init, step, State, action_lookup, Character
+import constants
+from step import init, step, State, Actions, Character
 from dnd5e import encode_action, ActionTuple, decode_action
 from character import CharacterExtra, convert, JaxStringArray
 from dnd_character import CLASSES
@@ -78,8 +79,8 @@ def party():
         dexterity=12,
         constitution=16,
         intelligence=10,
-        wisdom=15,
-        charisma=8
+        wisdom=16,
+        charisma=10
     )
     goldmoon.armor = Item('chain-mail')
     goldmoon.main_hand = Item('mace')
@@ -120,7 +121,7 @@ def party():
         classs=CLASSES["rogue"],
         strength=10,
         dexterity=18,
-        constitution=10,
+        constitution=8,
         intelligence=14,
         wisdom=8,
         charisma=14
@@ -169,7 +170,7 @@ def test_init(party):
     assert state.character.hp.shape == (2, 4)
     assert jnp.allclose(state.character.hp, jnp.float16([
         [11, 8, 11, 13],
-        [9, 8, 11, 13],
+        [9, 7, 11, 13],
     ]))
     name = JaxStringArray.uint8_array_to_str(state.character.name[0, 0])
     assert name == 'wyll'
@@ -177,15 +178,16 @@ def test_init(party):
 
 def test_longsword(party):
     state = init(party)
-    longsword = action_lookup['longsword']
+    longsword = Actions['longsword']
     action = encode_action(longsword, 3, 1, 1)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert exp_dmg(prev_state, state, action) == 4.5 * 0.5
+    assert exp_dmg(prev_state, state, action) == (4.5 + 3) * 0.5
+
 
 def test_eldrich_blast(party):
     state = init(party)
-    blast = action_lookup['eldrich-blast']
+    blast = Actions['eldrich-blast']
     action = encode_action(blast, 0, 1, 1)
     prev_state = deepcopy(state)
     state = step(state, action)
@@ -203,8 +205,8 @@ def test_vmap(party):
 
     state = vmap_init(rng_init)
 
-    longsword = encode_action(action_lookup['longsword'], 3, 1, 1)
-    blast = encode_action(action_lookup['eldrich-blast'], 0, 1, 1)
+    longsword = encode_action(Actions['longsword'], 3, 1, 1)
+    blast = encode_action(Actions['eldrich-blast'], 0, 1, 1)
     action = jnp.array([longsword, blast])
     prev_state = deepcopy(state)
     state = jax.vmap(step)(state, action)
@@ -212,3 +214,48 @@ def test_vmap(party):
     assert jax.vmap(exp_dmg)(prev_state, state, action)[1] == 5.5 * 10/20
 
 
+def test_longbow(party):
+    state = init(party)
+    longsword = Actions['longbow']
+    action = encode_action(longsword, 3, 1, 1)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert exp_dmg(prev_state, state, action) == (4.5 + 1) * 8/20
+
+
+def test_poison_spray(party):
+    state = init(party)
+    spray = Actions['poison-spray']
+    action = encode_action(spray, 0, 1, 1)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert exp_dmg(prev_state, state, action) == 6.5 * (8+2+3+1)/20
+
+    state = init(party)
+    spray = Actions['poison-spray']
+    action = encode_action(spray, 0, 1, 3)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert jnp.allclose(exp_dmg(prev_state, state, action), 6.5 * (8 + 2 + 3 - 3 - 2) / 20, atol=0.01)
+
+
+def test_burning_hands(party):
+    state = init(party)
+    burning_hands = Actions['burning-hands']
+    action = encode_action(burning_hands, 0, 1, 1)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    save_fail_prob = (8 + 2 + 3 - 3 - 3) / 20
+    exp_damage = (save_fail_prob + (1-save_fail_prob) * 0.5) * 3.5 * 3
+    assert jnp.allclose(exp_dmg(prev_state, state, action), exp_damage, atol=0.01)
+
+def test_hold_person(party):
+    state = init(party)
+    hold_person = Actions['hold-person'].value
+    action = encode_action(hold_person, 2, 1, 1, n_actions=len(Actions))
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    save_fail_prob = (8 + 2 + 3 + 1) / 20
+    exp_damage = 0
+    assert jnp.allclose(exp_dmg(prev_state, state, action), exp_damage, atol=0.01)
+    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED] == save_fail_prob

@@ -1,5 +1,4 @@
 import dataclasses
-
 import jax
 import jax.numpy as jnp
 import pgx
@@ -7,34 +6,14 @@ import chex
 from enum import IntEnum, auto
 from typing import List, Dict
 from pgx import EnvId
-from character import CharacterExtra, stack_party
-from constants import HitrollType, N_PLAYERS, N_CHARACTERS
+
+import constants
+from character import CharacterExtra, stack_party, ActionEntry
+from constants import HitrollType, N_PLAYERS, N_CHARACTERS, Conditions, Abilities, SaveFreq
 from dnd5e import ActionTuple, decode_action
 from pgx.core import Array
-from character import JaxStringArray
+from character import JaxStringArray, DamageType
 import numpy as np
-
-class Ability(IntEnum):
-    STR = 0
-    DEX = auto()
-    CON = auto()
-    INT = auto()
-    WIS = auto()
-    CHA = auto()
-
-
-class DamageType(IntEnum):
-    SLASHING = 0
-    FORCE = auto()
-
-
-class Conditions(IntEnum):
-    POISONED = 0
-    PARALYZED = 1
-
-
-class SaveFreq(IntEnum):
-    END_TARGET_TURN = 0
 
 
 @chex.dataclass
@@ -54,72 +33,73 @@ class ActionArray:
     save_dc: jnp.int8  # the item or spell dc to use if use_save_dc is set
     save_mod: jnp.float16  # damage multiplier on successful save
     save_freq: jnp.int8  # end of targets turn, on damage, none, etc
+    cum_save: jnp.float16  # to track the effect of cumulative saves over time
     bonus_attacks: jnp.int8  # bonus attacks can be applied to any weapon
     bonus_spell_attacks: jnp.int8  # can only use the recently cast spell
     recurring_damage: jnp.float16  # edge case where recurring damage is different to the main damage
 
 
-@dataclasses.dataclass
-class ActionEntry:
-    name: str
-    damage: float
-    damage_type: int
-    req_hitroll: bool
-    hitroll_type: HitrollType
-    ability_mod_damage: bool
-    inflicts_condition: bool
-    condition: Conditions
-    condition_duration: int  # rounds ( 6 seconds )
-    can_save: bool
-    save: Ability
-    use_save_dc: bool
-    save_dc: int
-    save_mod: float
-    save_freq: SaveFreq
-    bonus_attacks: int
-    bonus_spell_attacks: int
-    recurring_damage: float
-
-
 def item(name: str,
          damage: float,
-         damage_type: DamageType) -> ActionEntry:
+         damage_type: DamageType,
+         req_hitroll=True,
+         hitroll_type=HitrollType.MELEE,
+         ability_mod_damage=True,
+         inflicts_condition=False,
+         condition=Conditions.POISONED,  # placeholder
+         condition_duration=0,
+         can_save=False,
+         save=Abilities.CON,  # placeholder
+         use_save_dc=False,
+         save_dc=10,
+         save_mod=0.5,
+         save_freq=SaveFreq.END_TARGET_TURN,
+         cum_save=0.,
+         bonus_attacks=0,
+         bonus_spell_attacks=0.,
+         recurring_damage=0.
+
+         ) -> ActionEntry:
+
+
     return ActionEntry(
-        name=name,
-        damage=damage,
-        damage_type=damage_type,
-        req_hitroll=True,
-        hitroll_type=HitrollType.MELEE,
-        ability_mod_damage=True,
-        inflicts_condition=False,
-        condition=Conditions.POISONED,  # placeholder
-        condition_duration=0,
-        can_save=False,
-        save=Ability.CON,  # placeholder
-        use_save_dc=False,
-        save_dc=10,
-        save_mod=1.0,
-        save_freq=SaveFreq.END_TARGET_TURN,
-        bonus_attacks=0,
-        bonus_spell_attacks=0.,
-        recurring_damage=0.
+        name,
+        damage,
+        damage_type,
+        req_hitroll,
+        hitroll_type,
+        ability_mod_damage,
+        inflicts_condition,
+        condition,  # placeholder
+        condition_duration,
+        can_save,
+        save,  # placeholder
+        use_save_dc,
+        save_dc,
+        save_mod,
+        save_freq,
+        cum_save,
+        bonus_attacks,
+        bonus_spell_attacks,
+        recurring_damage
     )
 
 
 def spell(name: str,
-          damage: float,
-          damage_type: DamageType,
+          damage=0.,
+          damage_type=DamageType.FORCE,
           req_hitroll=False,
           hitroll_type=HitrollType.SPELL,
-          ability_mod_damage=True,
+          ability_mod_damage=False,
           inflicts_condition=False,
           condition=Conditions.POISONED,  # placeholder
           condition_duration=0,
           can_save=False,
-          save=Ability.CON,  # placeholder
+          save=Abilities.CON,  # placeholder
           use_save_dc=False,
           save_dc=10,
           save_mod=0.5,
+          cum_save=0.,
           save_freq=SaveFreq.END_TARGET_TURN,
           bonus_attacks=0,
           bonus_spell_attacks=0.,
@@ -141,6 +121,7 @@ def spell(name: str,
         save_dc,
         save_mod,
         save_freq,
+        cum_save,
         bonus_attacks,
         bonus_spell_attacks,
         recurring_damage
@@ -148,11 +129,17 @@ def spell(name: str,
 
 
 action_table = [
+    spell('end_turn'),
     item('longsword', damage=4.5, damage_type=DamageType.SLASHING),
-    spell('eldrich-blast', 5.5, DamageType.FORCE, True)
+    item('longbow', hitroll_type=HitrollType.RANGED, damage=4.5, damage_type=DamageType.PIERCING),
+    spell('eldrich-blast', 5.5, DamageType.FORCE, True),
+    spell('poison-spray', 6.5, DamageType.POISON, can_save=True, save=Abilities.CON, save_mod=0.),
+    spell('burning-hands', 3.5 * 3, DamageType.FIRE, can_save=True, save=Abilities.DEX, save_mod=0.5),
+    spell('hold-person', inflicts_condition=True, condition=Conditions.PARALYZED, can_save=True, save=Abilities.WIS)
 ]
 
-action_lookup = {entry.name: i for i, entry in enumerate(action_table)}
+Actions = {entry.name: i for i, entry in enumerate(action_table)}
+ActionsEnum = IntEnum('ActionsEnum', [a.name for a in action_table])
 
 
 def load_action(action: ActionEntry):
@@ -172,6 +159,7 @@ def load_action(action: ActionEntry):
         save_dc=jnp.int8(action.save_dc),
         save_mod=jnp.float16(action.save_mod),
         save_freq=jnp.int8(action.save_freq),
+        cum_save=jnp.float32(action.cum_save),
         bonus_attacks=jnp.int8(action.bonus_attacks),
         bonus_spell_attacks=jnp.int8(action.bonus_spell_attacks),
         recurring_damage=jnp.float16(action.recurring_damage),
@@ -192,6 +180,8 @@ class Character:
     attack_ability_mods: jnp.int8
     save_bonus: jnp.int8
     damage_type_mul: jnp.float16
+    conditions: jnp.bool
+    effects: ActionArray
 
 
 import pgx._src.struct
@@ -235,19 +225,23 @@ def init(party: Dict[str, Dict[str, CharacterExtra]]):
 debug = True
 
 
-def step_to_str(source:Character, target:Character, weaponspell:ActionArray, damage:jnp.float16):
+def step_to_str(source: Character, target: Character, weaponspell: ActionArray, damage: jnp.float16,
+                save_fail: jnp.float16):
     source_name = JaxStringArray.uint8_array_to_str(source.name)
     target_name = JaxStringArray.uint8_array_to_str(target.name)
     action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
-    damage = np.array(jax.device_get(damage))
+    save_fail = np.array(save_fail)
+    damage = np.array(damage)
     hitroll_type = weaponspell.hitroll_type.item()
 
+    save_msg = f' saved {save_fail:.2f}' if weaponspell.can_save else ''
+
     if hitroll_type in {HitrollType.MELEE, HitrollType.FINESSE}:
-        return f'{source_name} hit {target_name} with {action_name} for {damage}'
+        return f'{source_name} hit {target_name} with {action_name} for {damage:.2f}' + save_msg
     elif hitroll_type == HitrollType.SPELL:
-        return f'{source_name} cast {action_name} on {target_name} for {damage}'
+        return f'{source_name} cast {action_name} on {target_name} for {damage:.2f}' + save_msg
     elif hitroll_type == HitrollType.RANGED:
-        return f'{source_name} shot {target_name} with {action_name} for {damage}'
+        return f'{source_name} shot {target_name} with {action_name} for {damage:.2f}' + save_msg
 
 
 def print_step(*args):
@@ -255,26 +249,37 @@ def print_step(*args):
 
 
 def step(state: State, action: Array):
-    action = decode_action(action, state.current_player, state.pos)
-    source = jax.tree.map(lambda x: x[*action.source], state.character)
-    weaponspell = jax.tree.map(lambda action_items: action_items[action.action], action_table)
-    target = jax.tree.map(lambda x: x[*action.target], state.character)
+    action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
+    source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
+    weapon: ActionArray = jax.tree.map(lambda action_items: action_items[action.action], action_table)
+    target: Character = jax.tree.map(lambda x: x[*action.target], state.character)
 
-    hitroll = 20 - target.ac + source.prof_bonus + source.attack_ability_mods[weaponspell.hitroll_type]
+    source_ability_bonus = source.attack_ability_mods[weapon.hitroll_type]
+
+    hitroll = 20 - target.ac + source.prof_bonus + source_ability_bonus
     hitroll = jnp.float16(hitroll).clip(1, 20) / 20
-    hitroll_mul = jnp.where(weaponspell.req_hitroll, hitroll, jnp.ones_like(hitroll))
+    hitroll_mul = jnp.where(weapon.req_hitroll, hitroll, jnp.ones_like(hitroll))
 
-    save_dc = source.prof_bonus + source.attack_ability_mods[weaponspell.hitroll_type]
-    save_dc = jnp.where(weaponspell.use_save_dc, weaponspell.save_dc, save_dc)
-    target_bonus_save = target.prof_bonus * target.save_bonus[weaponspell.save] + target.ability_mods[weaponspell.save]
-    save = 8 + save_dc - target_bonus_save
-    save = jnp.float16(save).clip(1, 20) / 20
-    save_mul = jnp.where(weaponspell.can_save, save, jnp.ones_like(save))
+    save_dc = 8 + source.prof_bonus + source_ability_bonus
+    save_dc = jnp.where(weapon.use_save_dc, weapon.save_dc, save_dc)
+    target_bonus_save = target.prof_bonus * target.save_bonus[weapon.save] + target.ability_mods[weapon.save]
+    save_hurdle = save_dc - target_bonus_save
+    save_fail_prob = jnp.float16(save_hurdle).clip(1, 20) / 20
+    save_mul = save_fail_prob + (1 - save_fail_prob) * weapon.save_mod
+    save_mul = jnp.where(weapon.can_save, save_mul, jnp.ones_like(save_mul))
 
-    damage = weaponspell.damage * hitroll_mul * save_mul * target.damage_type_mul[weaponspell.damage_type]
+    damage = weapon.damage + jnp.where(weapon.ability_mod_damage, source_ability_bonus, 0)
+    damage = damage * hitroll_mul * save_mul * target.damage_type_mul[weapon.damage_type]
     state.character.hp = state.character.hp.at[*action.target].set(state.character.hp[*action.target] - damage)
 
+    # condition < 0.5 means the condition stays in effect
+    save_fail_prob = jnp.where(weapon.inflicts_condition, save_fail_prob, 0.)
+    state.character.conditions = state.character.conditions.at[*action.target, weapon.condition].set(save_fail_prob)
+
+    # perform end of turn actions
+    source_conditions = source.conditions
+
     if debug:
-        jax.debug.callback(print_step, source, target, weaponspell, damage)
+        jax.debug.callback(print_step, source, target, weapon, damage, save_fail_prob)
 
     return state

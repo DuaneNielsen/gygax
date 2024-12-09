@@ -54,15 +54,17 @@ def _legal_actions(state):
     return legal_actions[state.current_player]
 
 
-def encode_action(action, source_character, target_party, target_slot):
+def encode_action(action, source_character, target_party, target_slot, n_actions=None):
+    n_actions = N_ACTIONS if n_actions is None else n_actions
     multi_index = [source_character, action, target_party, target_slot]
-    return jnp.ravel_multi_index(multi_index, [N_CHARACTERS, N_ACTIONS, N_PLAYERS, N_CHARACTERS])
+    return jnp.ravel_multi_index(multi_index, [N_CHARACTERS, n_actions, N_PLAYERS, N_CHARACTERS])
 
 
-def decode_action(encoded_action, current_player, pos):
-    source_character, action, target_party, target_slot = jnp.unravel_index(encoded_action,
-                                                                            [N_CHARACTERS, N_ACTIONS, N_PLAYERS,
-                                                                             N_CHARACTERS])
+def decode_action(encoded_action, current_player, pos, n_actions=None):
+    n_actions = N_ACTIONS if n_actions is None else n_actions
+    source_character, action, target_party, target_slot = jnp.unravel_index(
+        encoded_action,[N_CHARACTERS, n_actions, N_PLAYERS,N_CHARACTERS])
+
     # reverse the target party for NPCs
     target_party = (target_party + current_player) % N_PLAYERS
     target_character = pos[target_party, target_slot]
