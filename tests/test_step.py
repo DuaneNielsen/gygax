@@ -174,6 +174,7 @@ def test_init(party):
     ]))
     name = JaxStringArray.uint8_array_to_str(state.character.name[0, 0])
     assert name == 'wyll'
+    assert jnp.any(state.character.effect_active) == False
 
 
 def test_longsword(party):
@@ -249,13 +250,22 @@ def test_burning_hands(party):
     exp_damage = (save_fail_prob + (1-save_fail_prob) * 0.5) * 3.5 * 3
     assert jnp.allclose(exp_dmg(prev_state, state, action), exp_damage, atol=0.01)
 
+
 def test_hold_person(party):
     state = init(party)
-    hold_person = Actions['hold-person'].value
+    hold_person = Actions['hold-person']
     action = encode_action(hold_person, 2, 1, 1, n_actions=len(Actions))
     prev_state = deepcopy(state)
     state = step(state, action)
     save_fail_prob = (8 + 2 + 3 + 1) / 20
     exp_damage = 0
+    assert state.character.conditions.shape == (2, 4, len(constants.Conditions))
     assert jnp.allclose(exp_dmg(prev_state, state, action), exp_damage, atol=0.01)
-    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED] == save_fail_prob
+    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED]
+    assert state.character.effects.condition[1, 1, 0]
+    assert state.character.effects.cum_save[1, 1, 0] == 0.7
+
+    hold_person = Actions['end-turn']
+    action = encode_action(hold_person, 2, 1, 1, n_actions=len(Actions))
+    prev_state = deepcopy(state)
+    state = step(state, action)

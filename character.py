@@ -294,6 +294,7 @@ class CharacterExtra(Character):
         self._armor = None
 
         self.conditions = [False] * len(constants.Conditions)
+        self.effect_active = [False] * constants.N_EFFECTS
         self.effects = [ActionEntry()] * constants.N_EFFECTS
 
     @property
@@ -529,13 +530,6 @@ class CharacterExtra(Character):
         else:
             return None
 
-    # @property
-    # def conditions(self):
-    #     return self._conditions
-    #
-    # @conditions.setter
-    # def conditions(self, item : List[Conditions]):
-    #     self._conditions = item
 
 from typing import TypeVar
 

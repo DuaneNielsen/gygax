@@ -60,8 +60,6 @@ def item(name: str,
          recurring_damage=0.
 
          ) -> ActionEntry:
-
-
     return ActionEntry(
         name,
         damage,
@@ -129,13 +127,13 @@ def spell(name: str,
 
 
 action_table = [
-    spell('end_turn'),
+    spell('end-turn'),
     item('longsword', damage=4.5, damage_type=DamageType.SLASHING),
     item('longbow', hitroll_type=HitrollType.RANGED, damage=4.5, damage_type=DamageType.PIERCING),
     spell('eldrich-blast', 5.5, DamageType.FORCE, True),
     spell('poison-spray', 6.5, DamageType.POISON, can_save=True, save=Abilities.CON, save_mod=0.),
     spell('burning-hands', 3.5 * 3, DamageType.FIRE, can_save=True, save=Abilities.DEX, save_mod=0.5),
-    spell('hold-person', inflicts_condition=True, condition=Conditions.PARALYZED, can_save=True, save=Abilities.WIS)
+    spell('hold-person', inflicts_condition=True, condition=Conditions.PARALYZED, can_save=True, save=Abilities.WIS, condition_duration=10)
 ]
 
 Actions = {entry.name: i for i, entry in enumerate(action_table)}
@@ -181,6 +179,7 @@ class Character:
     save_bonus: jnp.int8
     damage_type_mul: jnp.float16
     conditions: jnp.bool
+    effect_active: jnp.bool
     effects: ActionArray
 
 
@@ -248,6 +247,15 @@ def print_step(*args):
     print(step_to_str(*args))
 
 
+def save(save, save_dc, target):
+    target_bonus_save = target.prof_bonus * target.save_bonus[save] + target.ability_mods[save]
+    save_hurdle = save_dc - target_bonus_save
+    return jnp.float16(save_hurdle).clip(1, 20) / 20
+
+
+vmap_save = jax.vmap(save, in_axes=(0, 0, None))
+
+
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
     source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
@@ -256,30 +264,51 @@ def step(state: State, action: Array):
 
     source_ability_bonus = source.attack_ability_mods[weapon.hitroll_type]
 
+    # hitroll for action
     hitroll = 20 - target.ac + source.prof_bonus + source_ability_bonus
     hitroll = jnp.float16(hitroll).clip(1, 20) / 20
     hitroll_mul = jnp.where(weapon.req_hitroll, hitroll, jnp.ones_like(hitroll))
 
+    # saving throw for action
     save_dc = 8 + source.prof_bonus + source_ability_bonus
     save_dc = jnp.where(weapon.use_save_dc, weapon.save_dc, save_dc)
-    target_bonus_save = target.prof_bonus * target.save_bonus[weapon.save] + target.ability_mods[weapon.save]
-    save_hurdle = save_dc - target_bonus_save
-    save_fail_prob = jnp.float16(save_hurdle).clip(1, 20) / 20
+    weapon.save_dc = save_dc  # remember for subsequent saves
+
+    save_fail_prob = save(weapon.save, save_dc, target)
     save_mul = save_fail_prob + (1 - save_fail_prob) * weapon.save_mod
     save_mul = jnp.where(weapon.can_save, save_mul, jnp.ones_like(save_mul))
 
+    # damage from action
     damage = weapon.damage + jnp.where(weapon.ability_mod_damage, source_ability_bonus, 0)
     damage = damage * hitroll_mul * save_mul * target.damage_type_mul[weapon.damage_type]
     state.character.hp = state.character.hp.at[*action.target].set(state.character.hp[*action.target] - damage)
 
-    # condition < 0.5 means the condition stays in effect
-    save_fail_prob = jnp.where(weapon.inflicts_condition, save_fail_prob, 0.)
-    state.character.conditions = state.character.conditions.at[*action.target, weapon.condition].set(save_fail_prob)
+    # save_fail > 0.5 means the saving throw failed, so set a condition if required
+    condition = jnp.where(weapon.inflicts_condition, save_fail_prob > 0.5, False)
+    state.character.conditions = state.character.conditions.at[*action.target, weapon.condition].set(condition)
+    weapon.cum_save = save_fail_prob
 
-    # perform end of turn actions
-    source_conditions = source.conditions
+    # add the effect to the effect index if it's going to carry over multiple turns
+    effect_index = jnp.argmin(target.effect_active)
+    effect_turns = (weapon.condition_duration > 0) & (save_fail_prob > 0.5)
+    assert effect_index < target.effect_active.shape[-1]  # check for overflow
+    add_effect_if_duration = lambda e, w: jnp.where(effect_turns, e.at[effect_index].set(w), e)
+    target.effects = jax.tree.map(add_effect_if_duration, target.effects, weapon)
+    effect_active = target.effect_active
+    target.effect_active = jnp.where(effect_turns, effect_active.at[effect_index].set(True), effect_active)
+    state.character.effects = jax.tree.map(lambda s, t: s.at[*action.target].set(t), state.character.effects, target.effects)
+
+    # end of turn saving throws for effects
+    effects: ActionArray = jax.tree.map(lambda s: s[*action.source], state.character.effects)
+    effect_save_fail_prob = vmap_save(effects.save, effects.save_dc, source)
+    cum_save = state.character.effects.cum_save[*action.source] * effect_save_fail_prob
+    cum_save = jnp.select(cum_save > 0.5, cum_save, jnp.zeros_like(cum_save))
+    target.effect_active = cum_save > 0.5  # clear active effects that saved
+    condition = jnp.select(effects.inflicts_condition, cum_save > 0.5, False)
+    state.character.conditions = state.character.conditions.at[*action.source, effects.condition].set(condition)
+    state.character.effects.cum_save.at[*action.source].set(cum_save)
 
     if debug:
-        jax.debug.callback(print_step, source, target, weapon, damage, save_fail_prob)
+        jax.debug.callback(print_step, source, target, weapon, damage, (1 - save_fail_prob))
 
     return state
