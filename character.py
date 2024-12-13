@@ -28,7 +28,7 @@ class ActionEntry:
     ability_mod_damage: bool = False
     inflicts_condition: bool = False
     condition: Conditions = Conditions.POISONED
-    condition_duration: int = 0  # rounds ( 6 seconds )
+    duration: int = 0  # rounds ( 6 seconds )
     can_save: bool = False
     save: Abilities = Abilities.CON
     use_save_dc: bool = False
@@ -39,6 +39,10 @@ class ActionEntry:
     bonus_attacks: int = 0
     bonus_spell_attacks: int = 0
     recurring_damage: float = 0.
+    recurring_damage_save_mod: float = 0.
+
+    def replace(self, **kwargs) -> 'ActionEntry':
+        return dataclasses.replace(self, **kwargs)
 
 
 def fix_length(text: str, target_length: int, fill_char=" ") -> str:
