@@ -165,16 +165,16 @@ def init(party: Dict[str, Dict[str, CharacterExtra]]):
 debug = True
 
 
-def step_to_str(source: Character, target: Character, weaponspell: ActionArray, damage: jnp.float16,
+def step_to_str(source: Character, target: Character, weapon: ActionArray, damage: jnp.float16,
                 save_fail: jnp.float16):
     source_name = JaxStringArray.uint8_array_to_str(source.name)
     target_name = JaxStringArray.uint8_array_to_str(target.name)
-    action_name = JaxStringArray.uint8_array_to_str(weaponspell.name)
+    action_name = JaxStringArray.uint8_array_to_str(weapon.name)
     save_fail = np.array(save_fail)
     damage = np.array(damage)
-    hitroll_type = weaponspell.hitroll_type.item()
+    hitroll_type = weapon.hitroll_type.item()
 
-    save_msg = f' saved {save_fail:.2f}' if weaponspell.can_save else ''
+    save_msg = f' saved {save_fail:.2f}' if weapon.can_save else ''
 
     if hitroll_type in {HitrollType.MELEE, HitrollType.FINESSE}:
         return f'{source_name} hit {target_name} with {action_name} for {damage:.2f}' + save_msg
@@ -275,14 +275,19 @@ def step(state: State, action: Array):
     effect_active, effects = jax.vmap(step_effect, in_axes=(0, None))(effects, source)
 
     # apply effects to character (map reduce pattern)
-    # conditions = state.character.conditions.at[*action.source, effects.condition].set(effects.inflicts_condition)
     hp = state.character.hp[*action.source] - jnp.sum(effects.recurring_damage * prev_effect_active)
+
+    # I'm sure the below reduce could be optimized to use less memory if I thought about it more
+    effect_conditions = jax.nn.one_hot(effects.condition, num_classes=len(constants.Conditions), dtype=jnp.bool)
+    effect_conditions = effect_conditions & effect_active.reshape(constants.N_EFFECTS, 1)
+    conditions = effect_conditions.any(0)
 
     end_turn = action.action == Actions['end-turn']
 
     # update effects and
     state.character.effect_active = update_character_if(action.source, end_turn, state.character.effect_active, effect_active)
     state.character.hp = update_character_if(action.source, end_turn, state.character.hp, hp)
+    state.character.conditions = update_character_if(action.source, end_turn, state.character.conditions, conditions)
     state.character.effects = jax.tree.map(partial(update_character_if, action.source, end_turn), state.character.effects, effects)
 
     # conditions = jnp.where(end_turn, conditions, state.character.conditions[*action.source])

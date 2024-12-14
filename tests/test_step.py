@@ -84,7 +84,7 @@ def party():
         dexterity=12,
         constitution=16,
         intelligence=10,
-        wisdom=16,
+        wisdom=18,
         charisma=10
     )
     goldmoon.armor = Item('scale-mail')
@@ -196,11 +196,13 @@ def make_action(state, party, source, action_str, target):
     target_char = party[target[0]][target[1]]
     action = Actions[action_str]
     current_party = source[0]
+
     if current_party == state.current_player:
-        encoded_action = encode_action(action, source[1], 1, target[1], n_actions=len(Actions))
+        encoded_action = encode_action(action, source[1], target[0], target[1], n_actions=len(Actions))
     else:
         state = state.replace(current_player=(state.current_player + 1) % 2)
-        encoded_action = encode_action(action, source[1], 1, target[1], n_actions=len(Actions))
+        target_party = (target[0] + state.current_player) % 2
+        encoded_action = encode_action(action, source[1], target_party, target[1], n_actions=len(Actions))
     return state, encoded_action,  (source_char, target_char)
 
 
@@ -234,13 +236,17 @@ def test_vmap(party):
 
     state = vmap_init(rng_init)
 
-    state, longsword, (source, target) = make_action(state, party, riverwind,  'longsword', clarion)
+    def select(state, index):
+        return jax.tree.map(lambda s: s[index], state)
+
+    state0, longsword, (source, target) = make_action(select(state, 0), party, riverwind,  'longsword', clarion)
     hitroll_sword = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.STR]) / 20
 
-    state, blast, (source, target) = make_action(state, party, riverwind,  'eldrich-blast', clarion)
+    state1, blast, (source, target) = make_action(select(state, 1), party, riverwind,  'eldrich-blast', clarion)
     hitroll_blast = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.CHA]) / 20
 
     action = jnp.array([longsword, blast])
+    state = jax.tree.map(lambda *x: jnp.stack(x), state0, state1)
     prev_state = deepcopy(state)
     state = jax.vmap(step)(state, action)
     dmg = jax.vmap(d_hp_target)(prev_state, state, action)
@@ -317,23 +323,44 @@ def test_acid_arrow(party):
     assert not state.character.effect_active[*goldmoon, 0]
 
 
+def save(source, target, hitroll_type, ability):
+    dc = 8 + source.prof_bonus + source.attack_ability_mods[hitroll_type]
+    save_prob = (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
+    return save_prob, dc
 
 
 def test_hold_person(party):
     state = init(party)
-    hold_person = Actions['hold-person']
-    action = encode_action(hold_person, 2, 1, 1, n_actions=len(Actions))
+    state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', joffrey)
     prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob = (8 + 2 + 3 + 1) / 20
-    exp_damage = 0
-    assert state.character.conditions.shape == (2, 4, len(constants.Conditions))
-    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
-    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED]
-    assert state.character.effects.condition[1, 1, 0]
-    assert state.character.effects.cum_save[1, 1, 0] == 0.7
+    save_fail_prob, dc = save(source, target, constants.HitrollType.SPELL, Abilities.WIS)
 
-    hold_person = Actions['end-turn']
-    action = encode_action(hold_person, 2, 1, 1, n_actions=len(Actions))
+    # expectation is joffrey will fail his saving throw 0.75
+    assert state.character.conditions.shape == (2, 4, len(constants.Conditions))
+    assert jnp.allclose(d_hp_target(prev_state, state, action), 0, atol=0.01)
+    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED]
+    assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
+    assert state.character.effect_active[1, 1, 0]
+    assert state.character.effects.cum_save[1, 1, 0] == save_fail_prob
+    assert state.character.effects.save_dc[1, 1, 0] == dc
+
+    # second attempt at save will also fail in the expectation (0.567 chance of fail)
+    state, action, (source, target) = make_action(state, party, joffrey, 'end-turn', joffrey)
     prev_state = deepcopy(state)
     state = step(state, action)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), 0, atol=0.01)
+    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED]
+    assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
+    assert state.character.effect_active[1, 1, 0]
+    assert state.character.effects.cum_save[1, 1, 0] == save_fail_prob ** 2
+
+    # third will succeed (0.42 chance of fail)
+    state, action, (source, target) = make_action(state, party, joffrey, 'end-turn', joffrey)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), 0, atol=0.01)
+    assert not state.character.conditions[1, 1, constants.Conditions.PARALYZED]
+    assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
+    assert not state.character.effect_active[1, 1, 0]
+    assert state.character.effects.cum_save[1, 1, 0] == 0.
