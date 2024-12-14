@@ -40,6 +40,7 @@ class ActionArray:
     bonus_spell_attacks: jnp.int8  # can only use the recently cast spell
     recurring_damage: jnp.float16  # edge case where recurring damage is different to the main damage
     recurring_damage_save_mod: jnp.float16  # recurring damage reduction on save
+    req_concentration: jnp.bool
 
 
 item = ActionEntry(
@@ -61,7 +62,8 @@ item = ActionEntry(
     cum_save=0.,
     bonus_attacks=0,
     bonus_spell_attacks=0.,
-    recurring_damage=0.
+    recurring_damage=0.,
+    req_concentration=False,
 )
 
 spell = ActionEntry(
@@ -84,7 +86,8 @@ spell = ActionEntry(
     bonus_attacks=0,
     bonus_spell_attacks=0.,
     recurring_damage=0.,
-    recurring_damage_save_mod=0.
+    recurring_damage_save_mod=0.,
+    req_concentration=False
 )
 
 action_table = [
@@ -99,7 +102,7 @@ action_table = [
     spell.replace(name='acid-arrow', damage=4 * 2.5, damage_type=DamageType.ACID, req_hitroll=True, duration=1,
                   recurring_damage=2 * 2.5, recurring_damage_save_mod=0),
     spell.replace(name='hold-person', inflicts_condition=True, condition=Conditions.PARALYZED, can_save=True,
-                  save=Abilities.WIS, duration=10)
+                  save=Abilities.WIS, duration=10, req_concentration=True)
 ]
 
 Actions = {entry.name: i for i, entry in enumerate(action_table)}
@@ -122,6 +125,8 @@ class Character:
     conditions: jnp.bool
     effect_active: jnp.bool
     effects: ActionArray
+    concentrating: jnp.bool
+    concentration_ref: jnp.int8
 
 
 import pgx._src.struct
@@ -223,6 +228,22 @@ def step_effect(effect: ActionArray, character):
     return effect_active, effect
 
 
+def update_conditions(effect_active, effects):
+    """
+    Given the active effects on a character, returns the conditions
+    Args:
+        effect_active:
+        effects:
+
+    Returns:
+
+    """
+    # I'm sure the below reduce could be optimized to use less memory if I thought about it more
+    effect_conditions = jax.nn.one_hot(effects.condition, num_classes=len(constants.Conditions), dtype=jnp.bool)
+    effect_conditions = effect_conditions & effect_active[..., None]
+    return effect_conditions.any(-2)
+
+
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
     source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
@@ -230,6 +251,11 @@ def step(state: State, action: Array):
     target: Character = jax.tree.map(lambda x: x[*action.target], state.character)
 
     source_ability_bonus = source.attack_ability_mods[weapon.hitroll_type]
+
+    # if the action requires concentration, cancel existing concentration effects
+    effect_deactivated = state.character.effect_active.at[state.character.concentration_ref[*action.source]].set(False)
+    state.character.effect_active = jnp.where(weapon.req_concentration, effect_deactivated, state.character.effect_active)
+    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     # hitroll for action
     hitroll = 20 - target.ac + source.prof_bonus + source_ability_bonus
@@ -270,17 +296,22 @@ def step(state: State, action: Array):
     state.character.effect_active = state.character.effect_active.at[*action.target, effect_index].set(effect_active)
     state.character.effects = jax.tree.map(lambda s, t: s.at[*action.target].set(t), state.character.effects,target.effects)
 
+    # update concentration if required
+    state.character.concentrating = state.character.concentrating.at[*action.source, 0].set(weapon.req_concentration)
+    concentration_ref = state.character.concentration_ref.at[*action.source, 0].set([*action.target, 0])
+    state.character.concentration_ref = jnp.where(weapon.req_concentration, concentration_ref, state.character.concentration_ref)
+
+    """
+    now process effects on a character that occur on end-turn
+    """
+
     prev_effect_active = state.character.effect_active[*action.source]
     effects: ActionArray = jax.tree.map(lambda s: s[*action.source], state.character.effects)
     effect_active, effects = jax.vmap(step_effect, in_axes=(0, None))(effects, source)
 
     # apply effects to character (map reduce pattern)
     hp = state.character.hp[*action.source] - jnp.sum(effects.recurring_damage * prev_effect_active)
-
-    # I'm sure the below reduce could be optimized to use less memory if I thought about it more
-    effect_conditions = jax.nn.one_hot(effects.condition, num_classes=len(constants.Conditions), dtype=jnp.bool)
-    effect_conditions = effect_conditions & effect_active.reshape(constants.N_EFFECTS, 1)
-    conditions = effect_conditions.any(0)
+    conditions = update_conditions(effect_active, effects)
 
     end_turn = action.action == Actions['end-turn']
 

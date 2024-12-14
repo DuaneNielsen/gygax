@@ -40,6 +40,7 @@ class ActionEntry:
     bonus_spell_attacks: int = 0
     recurring_damage: float = 0.
     recurring_damage_save_mod: float = 0.
+    req_concentration: bool = False
 
     def replace(self, **kwargs) -> 'ActionEntry':
         return dataclasses.replace(self, **kwargs)
@@ -300,6 +301,9 @@ class CharacterExtra(Character):
         self.conditions = [False] * len(constants.Conditions)
         self.effect_active = [False] * constants.N_EFFECTS
         self.effects = [ActionEntry()] * constants.N_EFFECTS
+
+        self.concentrating = [False] * constants.MAX_TARGETS
+        self.concentration_ref = [[0, 0, 0]] * constants.MAX_TARGETS # player, character, effect_slot
 
     @property
     def hp(self):

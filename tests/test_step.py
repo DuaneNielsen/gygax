@@ -189,6 +189,8 @@ def test_init(party):
     name = JaxStringArray.uint8_array_to_str(state.character.name[0, 0])
     assert name == 'wyll'
     assert jnp.any(state.character.effect_active) == False
+    assert state.character.concentrating.shape == (constants.N_PLAYERS, constants.N_CHARACTERS, constants.MAX_TARGETS)
+    assert state.character.concentration_ref.shape == (constants.N_PLAYERS, constants.N_CHARACTERS, constants.MAX_TARGETS, 3)
 
 
 def make_action(state, party, source, action_str, target):
@@ -339,7 +341,7 @@ def test_hold_person(party):
     # expectation is joffrey will fail his saving throw 0.75
     assert state.character.conditions.shape == (2, 4, len(constants.Conditions))
     assert jnp.allclose(d_hp_target(prev_state, state, action), 0, atol=0.01)
-    assert state.character.conditions[1, 1, constants.Conditions.PARALYZED]
+    assert state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
     assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
     assert state.character.effect_active[1, 1, 0]
     assert state.character.effects.cum_save[1, 1, 0] == save_fail_prob
@@ -364,3 +366,19 @@ def test_hold_person(party):
     assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
     assert not state.character.effect_active[1, 1, 0]
     assert state.character.effects.cum_save[1, 1, 0] == 0.
+
+
+def test_concentration(party):
+    state = init(party)
+    state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', joffrey)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    save_fail_prob, dc = save(source, target, constants.HitrollType.SPELL, Abilities.WIS)
+    assert state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
+
+    state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', pikachu)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    save_fail_prob, dc = save(source, target, constants.HitrollType.SPELL, Abilities.WIS)
+    assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]

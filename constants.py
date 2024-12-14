@@ -72,6 +72,8 @@ class CharacterSheet(StrEnum):
 # the number of effects that can be active on a character
 N_EFFECTS = 8
 
+# the max number of targets that a concentration spell can effect
+MAX_TARGETS=8
 
 def create_sorted_enum(enum_name: str, keys: List[str]) -> type[IntEnum]:
     """
