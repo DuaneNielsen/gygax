@@ -40,6 +40,7 @@ class ActionEntry:
     bonus_spell_attacks: int = 0
     recurring_damage: float = 0.
     recurring_damage_save_mod: float = 0.
+    recurring_damage_hitroll: float = 1.
     req_concentration: bool = False
 
     def replace(self, **kwargs) -> 'ActionEntry':

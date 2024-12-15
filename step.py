@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import pgx
 import chex
 from enum import IntEnum, auto
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from pgx import EnvId
 
 import character
@@ -40,6 +40,7 @@ class ActionArray:
     bonus_spell_attacks: jnp.int8  # can only use the recently cast spell
     recurring_damage: jnp.float16  # edge case where recurring damage is different to the main damage
     recurring_damage_save_mod: jnp.float16  # recurring damage reduction on save
+    recurring_damage_hitroll: jnp.float16  # store the hitroll to compute concentration checks
     req_concentration: jnp.bool
 
 
@@ -217,6 +218,7 @@ def save_fail(save, save_dc, target):
 
 vmap_save_fail = jax.vmap(save_fail, in_axes=(0, 0, None))
 
+
 # @chex.chexify
 # @jax.jit
 # def check_overflow(effect_index, target):
@@ -271,10 +273,10 @@ def break_concentration(state, concentration_broken, character):
 
     """
     concentration_ref = state.character.concentration_ref[*character]
-    state.character.concentrating = update_character_if(character, concentration_broken, state.character.concentrating, False)
+    state.character.concentrating = update_character_if(character, concentration_broken, state.character.concentrating,
+                                                        False)
     effect_deactivated = state.character.effect_active.at[concentration_ref].set(False)
     state.character.effect_active = jnp.where(concentration_broken, effect_deactivated, state.character.effect_active)
-    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
     return state
 
 
@@ -294,6 +296,7 @@ def update_conditions(effect_active, effects):
     return effect_conditions.any(-2)
 
 
+
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
     source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
@@ -304,11 +307,13 @@ def step(state: State, action: Array):
 
     # if the action requires concentration, cancel existing concentration effects
     state = break_concentration(state, weapon.req_concentration & source.concentrating.any(-1), action.source)
+    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     # hitroll for action
     hitroll = 20 - target.ac + source.prof_bonus + source_ability_bonus
     hitroll = jnp.float16(hitroll).clip(1, 20) / 20
     hitroll_mul = jnp.where(weapon.req_hitroll, hitroll, jnp.ones_like(hitroll))
+    weapon.recurring_damage_hitroll = hitroll_mul
 
     # saving throw for action
     save_dc = 8 + source.prof_bonus + source_ability_bonus
@@ -327,16 +332,17 @@ def step(state: State, action: Array):
     state.character.hp = state.character.hp.at[*action.target].subtract(damage)
 
     # target makes concentration check on hit
+    check_concentration_on_hit = target.concentrating.any(-1) & (damage > 0)
     concentration_check_cum = (1 - hitroll * save_fail(Abilities.CON, 10, target)) * target.concentration_check_cum
-    state.character.concentration_check_cum = update_character_if(action.target, target.concentrating.any(),
+    concentration_check_fail = check_concentration_on_hit & (concentration_check_cum < 0.5)
+    state = break_concentration(state, concentration_check_fail, action.target)
+    state.character.concentration_check_cum = update_character_if(action.target, check_concentration_on_hit,
                                                                   state.character.concentration_check_cum,
                                                                   concentration_check_cum)
-    concentration_check_fail = target.concentrating.any(-1) & (damage > 0) & (concentration_check_cum < 0.5)
-    state = break_concentration(state, concentration_check_fail, action.target)
+    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     # expectation of recurring damage is reduced if you didn't hit
-    weapon.recurring_damage = weapon.recurring_damage * hitroll_mul * recurring_dmg_save_mul * target.damage_type_mul[
-        weapon.damage_type]
+    weapon.recurring_damage = weapon.recurring_damage * hitroll_mul * recurring_dmg_save_mul * target.damage_type_mul[weapon.damage_type]
 
     # save_fail > 0.5 means the saving throw failed, so set a condition if required
     condition = jnp.where(weapon.inflicts_condition, save_fail_prob > 0.5, False)
@@ -350,32 +356,53 @@ def step(state: State, action: Array):
     add_effect_if_duration = lambda e, w: jnp.where(effect_active, e.at[effect_index].set(w), e)
     target.effects = jax.tree.map(add_effect_if_duration, target.effects, weapon)
     state.character.effect_active = state.character.effect_active.at[*action.target, effect_index].set(effect_active)
-    state.character.effects = jax.tree.map(lambda s, t: s.at[*action.target].set(t), state.character.effects,target.effects)
+    state.character.effects = jax.tree.map(lambda s, t: s.at[*action.target].set(t), state.character.effects,
+                                           target.effects)
 
     # update concentration if spell requires it
-    state.character.concentrating = update_character_if(action.source, weapon.req_concentration, state.character.concentrating, True)
-    state.character.concentration_ref = update_character_if(action.source, weapon.req_concentration, state.character.concentration_ref, [*action.target, 0])
-    state.character.concentration_check_cum = update_character_if(action.source, weapon.req_concentration, state.character.concentration_check_cum, 1.)
+    state.character.concentrating = update_character_if(action.source, weapon.req_concentration,
+                                                        state.character.concentrating, True)
+    state.character.concentration_ref = update_character_if(action.source, weapon.req_concentration,
+                                                            state.character.concentration_ref, [*action.target, 0])
+    state.character.concentration_check_cum = update_character_if(action.source, weapon.req_concentration,
+                                                                  state.character.concentration_check_cum, 1.)
 
     """
     process effects on a character that occur on end-turn
     """
+    end_turn = action.action == Actions['end-turn']
 
     prev_effect_active = state.character.effect_active[*action.source]
     effects: ActionArray = jax.tree.map(lambda s: s[*action.source], state.character.effects)
     effect_active, effects = jax.vmap(step_effect, in_axes=(0, None))(effects, source)
 
-    # apply effects to character (map reduce pattern)
-    hp = state.character.hp[*action.source] - jnp.sum(effects.recurring_damage * prev_effect_active)
+    # reduce effects to a change in character state
     conditions = update_conditions(effect_active, effects)
+    hp = state.character.hp[*action.source] - jnp.sum(effects.recurring_damage * prev_effect_active)
 
-    end_turn = action.action == Actions['end-turn']
-
-    # update effects and apply to character
-    state.character.effect_active = update_character_if(action.source, end_turn, state.character.effect_active, effect_active)
+    # update character state
     state.character.hp = update_character_if(action.source, end_turn, state.character.hp, hp)
-    state.character.conditions = update_character_if(action.source, end_turn, state.character.conditions, conditions)
-    state.character.effects = jax.tree.map(partial(update_character_if, action.source, end_turn), state.character.effects, effects)
+    state.character.conditions = jnp.where(end_turn, conditions, state.character.conditions)
+    state.character.effect_active = update_character_if(action.source, end_turn, state.character.effect_active,
+                                                        effect_active)
+    state.character.effects = jax.tree.map(partial(update_character_if, action.source, end_turn),
+                                           state.character.effects, effects)
+
+    # if effects caused damage, make concentration checks
+    damaging_effects = (effects.recurring_damage > 0.) & prev_effect_active
+    concentration_fail_prob = save_fail(Abilities.CON, 10, source)
+    concentration_check_cum = jnp.where(damaging_effects, 1 - effects.recurring_damage_hitroll * concentration_fail_prob, 1.).prod()
+    concentration_check_cum = concentration_check_cum * source.concentration_check_cum
+    state.character.concentration_check_cum = update_character_if(action.source, target.concentrating.any() & end_turn,
+                                                                  state.character.concentration_check_cum,
+                                                                  concentration_check_cum)
+    concentration_check_fail = source.concentrating.any(-1) & damaging_effects.any() & (concentration_check_cum < 0.5) & end_turn
+    state.character.concentrating = update_character_if(action.source, concentration_check_fail, state.character.concentrating,
+                                                        False)
+    concentration_ref = state.character.concentration_ref[*action.source]
+    effect_deactivated = state.character.effect_active.at[concentration_ref].set(False)
+    state.character.effect_active = jnp.where(concentration_check_fail, effect_deactivated, state.character.effect_active)
+    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     if debug:
         jax.debug.callback(print_step, state, action, damage, (1 - save_fail_prob))

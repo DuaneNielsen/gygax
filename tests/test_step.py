@@ -382,17 +382,13 @@ def test_hold_person(party):
 def test_concentration(party):
     state = init(party)
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', joffrey)
-    prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
     assert state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
     assert state.character.concentrating[*goldmoon].any()
 
     # concentration on the first spell should end
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', pikachu)
-    prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
     assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
     assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
     assert state.character.concentrating[*goldmoon].any()
@@ -400,7 +396,6 @@ def test_concentration(party):
     # using an action that does not require concentration should not break concentration
     state, action, (source, target) = make_action(state, party, goldmoon, 'longsword', pikachu)
     state = step(state, action)
-    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
     assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
     assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
     assert state.character.concentrating[*goldmoon].any()
@@ -415,3 +410,41 @@ def test_concentration(party):
         assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** t > 0.5)
         assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** t > 0.5)
         assert jnp.allclose(state.character.concentration_check_cum[*goldmoon],  concentration_succ_prob ** t, atol=0.01)
+
+def test_concentration_from_spell_effects(party):
+
+    state = init(party)
+    state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', pikachu)
+    state = step(state, action)
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
+    assert state.character.concentrating[*goldmoon].any()
+
+    state, action, (source, target) = make_action(state, party, raistlin, 'acid-arrow', goldmoon)
+    state = step(state, action)
+    hit_p = hitroll(source, target, hit_ability=Abilities.INT)
+    concentration_succ_prob = 1 - hit_p * save_dc_fail(target, Abilities.CON, 10)
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** 1 > 0.5)
+    assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** 1 > 0.5)
+    assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], concentration_succ_prob ** 1, atol=0.01)
+
+    state, action, (source, target) = make_action(state, party, raistlin, 'acid-arrow', goldmoon)
+    state = step(state, action)
+    hit_p = hitroll(source, target, hit_ability=Abilities.INT)
+    concentration_succ_prob = 1 - hit_p * save_dc_fail(target, Abilities.CON, 10)
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** 2 > 0.5)
+    assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** 2 > 0.5)
+    assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], concentration_succ_prob ** 2, atol=0.01)
+
+    state, action, (source, target) = make_action(state, party, raistlin, 'acid-arrow', goldmoon)
+    state = step(state, action)
+    hit_p = hitroll(source, target, hit_ability=Abilities.INT)
+    concentration_succ_prob = 1 - hit_p * save_dc_fail(target, Abilities.CON, 10)
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** 3 > 0.5)
+    assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** 3 > 0.5)
+    assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], concentration_succ_prob ** 3, atol=0.01)
+
+    state, action, (source, target) = make_action(state, party, goldmoon, 'end-turn', goldmoon)
+    state = step(state, action)
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** 6 > 0.5)
+    assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** 6 > 0.5)
+    assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], concentration_succ_prob ** 6, atol=0.01)
