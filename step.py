@@ -94,6 +94,7 @@ action_table = [
     spell.replace(name='end-turn'),
     item.replace(name='longsword', damage=4.5, damage_type=DamageType.SLASHING),
     item.replace(name='longbow', hitroll_type=HitrollType.RANGED, damage=4.5, damage_type=DamageType.PIERCING),
+    item.replace(name='shortbow', hitroll_type=HitrollType.RANGED, damage=3.5, damage_type=DamageType.PIERCING),
     spell.replace(name='eldrich-blast', damage=5.5, damage_type=DamageType.FORCE, req_hitroll=True),
     spell.replace(name='poison-spray', damage=6.5, damage_type=DamageType.POISON, can_save=True, save=Abilities.CON,
                   save_mod=0.),
@@ -127,6 +128,7 @@ class Character:
     effects: ActionArray
     concentrating: jnp.bool
     concentration_ref: jnp.int8
+    concentration_check_cum: jnp.float16
 
 
 import pgx._src.struct
@@ -170,8 +172,11 @@ def init(party: Dict[str, Dict[str, CharacterExtra]]):
 debug = True
 
 
-def step_to_str(source: Character, target: Character, weapon: ActionArray, damage: jnp.float16,
+def step_to_str(state: State, action: ActionTuple, damage: jnp.float16,
                 save_fail: jnp.float16):
+    source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
+    weapon: ActionArray = jax.tree.map(lambda action_items: action_items[action.action], action_table)
+    target: Character = jax.tree.map(lambda x: x[*action.target], state.character)
     source_name = JaxStringArray.uint8_array_to_str(source.name)
     target_name = JaxStringArray.uint8_array_to_str(target.name)
     action_name = JaxStringArray.uint8_array_to_str(weapon.name)
@@ -180,26 +185,37 @@ def step_to_str(source: Character, target: Character, weapon: ActionArray, damag
     hitroll_type = weapon.hitroll_type.item()
 
     save_msg = f' saved {save_fail:.2f}' if weapon.can_save else ''
+    concentration_msg = f' {target_name} is concentrating' if target.concentrating.any() else ''
 
     if hitroll_type in {HitrollType.MELEE, HitrollType.FINESSE}:
-        return f'{source_name} hit {target_name} with {action_name} for {damage:.2f}' + save_msg
+        return f'{source_name} hit {target_name} with {action_name} for {damage:.2f}' + save_msg + concentration_msg
     elif hitroll_type == HitrollType.SPELL:
-        return f'{source_name} cast {action_name} on {target_name} for {damage:.2f}' + save_msg
+        return f'{source_name} cast {action_name} on {target_name} for {damage:.2f}' + save_msg + concentration_msg
     elif hitroll_type == HitrollType.RANGED:
-        return f'{source_name} shot {target_name} with {action_name} for {damage:.2f}' + save_msg
+        return f'{source_name} shot {target_name} with {action_name} for {damage:.2f}' + save_msg + concentration_msg
 
 
 def print_step(*args):
     print(step_to_str(*args))
 
 
-def save(save, save_dc, target):
+def save_fail(save, save_dc, target):
+    """
+    Probability of target failing the saving throw
+    Args:
+        save: Ability to use for the save, (CON, WIS etc)
+        save_dc: the dc to save against
+        target: the character making the save
+
+    Returns: the probability that the save will fail (0..1)
+
+    """
     target_bonus_save = target.prof_bonus * target.save_bonus[save] + target.ability_mods[save]
     save_hurdle = save_dc - target_bonus_save
     return jnp.float16(save_hurdle).clip(1, 20) / 20
 
 
-vmap_save = jax.vmap(save, in_axes=(0, 0, None))
+vmap_save_fail = jax.vmap(save_fail, in_axes=(0, 0, None))
 
 # @chex.chexify
 # @jax.jit
@@ -215,8 +231,22 @@ def update_character_if(character, cond, leaf, value):
 
 
 def step_effect(effect: ActionArray, character):
+    """
+    Steps the effects on a character 1 step forward
+      duration -- duration is reduced by 1 round each step, effect is deactivated when duration is 0
+      saving throws -- saving throws over time are accumulate to cancel the effect, ie: save_fail_prob ** steps
+      recurring_damage -- recurrent damage amount should be precomputed to account for saving throws and hitroll,
+        then it can be simply applied as long as the duration is active
+
+    Args:
+        effect: ActionArray (N_EFFECTS, ...)
+        character: CharacterArray, pytree representing a single character
+
+    Returns: effect active: bool (N_EFFECTS), effect: ActionArray (N_EFFECTS)
+
+    """
     # saving throws to resist active effects
-    effect_save_fail_prob = save(effect.save, effect.save_dc, character)
+    effect_save_fail_prob = save_fail(effect.save, effect.save_dc, character)
     effect.cum_save = effect.cum_save * effect_save_fail_prob
     effect.cum_save = jnp.where(effect.cum_save > 0.5, effect.cum_save, jnp.zeros_like(effect.cum_save))
     effect.inflicts_condition = jnp.where(effect.inflicts_condition, effect.cum_save > 0.5, False)
@@ -228,14 +258,34 @@ def step_effect(effect: ActionArray, character):
     return effect_active, effect
 
 
+def break_concentration(state, concentration_broken, character):
+    """
+    Breaks concentration of the character and cancels and updates spell effects
+
+    Args:
+        state:
+        concentration_broken: if true, will cancel the effects of the concentration
+        character:
+
+    Returns:
+
+    """
+    concentration_ref = state.character.concentration_ref[*character]
+    state.character.concentrating = update_character_if(character, concentration_broken, state.character.concentrating, False)
+    effect_deactivated = state.character.effect_active.at[concentration_ref].set(False)
+    state.character.effect_active = jnp.where(concentration_broken, effect_deactivated, state.character.effect_active)
+    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
+    return state
+
+
 def update_conditions(effect_active, effects):
     """
     Given the active effects on a character, returns the conditions
     Args:
-        effect_active:
-        effects:
+        effect_active: boolean indicating that the effect is active (..., num_effects)
+        effects: indices enumerating effects (..., num_effects)
 
-    Returns:
+    Returns: (..., num_conditions)
 
     """
     # I'm sure the below reduce could be optimized to use less memory if I thought about it more
@@ -253,9 +303,7 @@ def step(state: State, action: Array):
     source_ability_bonus = source.attack_ability_mods[weapon.hitroll_type]
 
     # if the action requires concentration, cancel existing concentration effects
-    effect_deactivated = state.character.effect_active.at[state.character.concentration_ref[*action.source]].set(False)
-    state.character.effect_active = jnp.where(weapon.req_concentration, effect_deactivated, state.character.effect_active)
-    state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
+    state = break_concentration(state, weapon.req_concentration & source.concentrating.any(-1), action.source)
 
     # hitroll for action
     hitroll = 20 - target.ac + source.prof_bonus + source_ability_bonus
@@ -267,7 +315,7 @@ def step(state: State, action: Array):
     save_dc = jnp.where(weapon.use_save_dc, weapon.save_dc, save_dc)
     weapon.save_dc = save_dc  # remember for subsequent saves
 
-    save_fail_prob = save(weapon.save, save_dc, target)
+    save_fail_prob = save_fail(weapon.save, save_dc, target)
     save_mul = save_fail_prob + (1 - save_fail_prob) * weapon.save_mod
     save_mul = jnp.where(weapon.can_save, save_mul, jnp.ones_like(save_mul))
     recurring_dmg_save_mul = save_fail_prob + (1 - save_fail_prob) * weapon.recurring_damage_save_mod
@@ -277,6 +325,14 @@ def step(state: State, action: Array):
     damage = weapon.damage + jnp.where(weapon.ability_mod_damage, source_ability_bonus, 0)
     damage = damage * hitroll_mul * save_mul * target.damage_type_mul[weapon.damage_type]
     state.character.hp = state.character.hp.at[*action.target].subtract(damage)
+
+    # target makes concentration check on hit
+    concentration_check_cum = (1 - hitroll * save_fail(Abilities.CON, 10, target)) * target.concentration_check_cum
+    state.character.concentration_check_cum = update_character_if(action.target, target.concentrating.any(),
+                                                                  state.character.concentration_check_cum,
+                                                                  concentration_check_cum)
+    concentration_check_fail = target.concentrating.any(-1) & (damage > 0) & (concentration_check_cum < 0.5)
+    state = break_concentration(state, concentration_check_fail, action.target)
 
     # expectation of recurring damage is reduced if you didn't hit
     weapon.recurring_damage = weapon.recurring_damage * hitroll_mul * recurring_dmg_save_mul * target.damage_type_mul[
@@ -296,13 +352,13 @@ def step(state: State, action: Array):
     state.character.effect_active = state.character.effect_active.at[*action.target, effect_index].set(effect_active)
     state.character.effects = jax.tree.map(lambda s, t: s.at[*action.target].set(t), state.character.effects,target.effects)
 
-    # update concentration if required
-    state.character.concentrating = state.character.concentrating.at[*action.source, 0].set(weapon.req_concentration)
-    concentration_ref = state.character.concentration_ref.at[*action.source, 0].set([*action.target, 0])
-    state.character.concentration_ref = jnp.where(weapon.req_concentration, concentration_ref, state.character.concentration_ref)
+    # update concentration if spell requires it
+    state.character.concentrating = update_character_if(action.source, weapon.req_concentration, state.character.concentrating, True)
+    state.character.concentration_ref = update_character_if(action.source, weapon.req_concentration, state.character.concentration_ref, [*action.target, 0])
+    state.character.concentration_check_cum = update_character_if(action.source, weapon.req_concentration, state.character.concentration_check_cum, 1.)
 
     """
-    now process effects on a character that occur on end-turn
+    process effects on a character that occur on end-turn
     """
 
     prev_effect_active = state.character.effect_active[*action.source]
@@ -315,15 +371,13 @@ def step(state: State, action: Array):
 
     end_turn = action.action == Actions['end-turn']
 
-    # update effects and
+    # update effects and apply to character
     state.character.effect_active = update_character_if(action.source, end_turn, state.character.effect_active, effect_active)
     state.character.hp = update_character_if(action.source, end_turn, state.character.hp, hp)
     state.character.conditions = update_character_if(action.source, end_turn, state.character.conditions, conditions)
     state.character.effects = jax.tree.map(partial(update_character_if, action.source, end_turn), state.character.effects, effects)
 
-    # conditions = jnp.where(end_turn, conditions, state.character.conditions[*action.source])
-
     if debug:
-        jax.debug.callback(print_step, source, target, weapon, damage, (1 - save_fail_prob))
+        jax.debug.callback(print_step, state, action, damage, (1 - save_fail_prob))
 
     return state

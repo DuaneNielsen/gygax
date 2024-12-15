@@ -21,6 +21,20 @@ def d_hp_source(state: State, next_state: State, action):
     return state.character.hp[*action.source] - next_state.character.hp[*action.source]
 
 
+def save_throw_fail(source, target, hitroll_type, ability, dc=None):
+    source_dc = 8 + source.prof_bonus + source.attack_ability_mods[hitroll_type]
+    dc = source_dc if dc is None else dc
+    save_prob = (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
+    return save_prob, dc
+
+
+def save_dc_fail(target, ability, dc):
+    return (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
+
+def hitroll(source, target, hit_ability: Abilities):
+    return (20 - target.ac + source.prof_bonus + source.ability_mods[hit_ability]) / 20
+
+
 def test_character():
     fighter = CharacterExtra(
         name='pikachu',
@@ -178,6 +192,13 @@ clarion=1, 2
 pikachu=1, 3
 
 
+def test_hitroll(party):
+    source = party[0][3]
+    target = party[1][2]
+    hitroll_p = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.STR]) / 20
+    assert hitroll_p == hitroll(source, target, Abilities.STR)
+
+
 def test_init(party):
     state = init(party)
 
@@ -196,15 +217,12 @@ def test_init(party):
 def make_action(state, party, source, action_str, target):
     source_char = party[source[0]][source[1]]
     target_char = party[target[0]][target[1]]
+    source_char_idx = source[1]
+    state = state.replace(current_player=source[0])
+    target_char_party = 1 if source[0] != target[0] else 0
+    target_char_idx = target[1]
     action = Actions[action_str]
-    current_party = source[0]
-
-    if current_party == state.current_player:
-        encoded_action = encode_action(action, source[1], target[0], target[1], n_actions=len(Actions))
-    else:
-        state = state.replace(current_player=(state.current_player + 1) % 2)
-        target_party = (target[0] + state.current_player) % 2
-        encoded_action = encode_action(action, source[1], target_party, target[1], n_actions=len(Actions))
+    encoded_action = encode_action(action, source_char_idx, target_char_party, target_char_idx, n_actions=len(Actions))
     return state, encoded_action,  (source_char, target_char)
 
 
@@ -213,8 +231,7 @@ def test_longsword(party):
     state, action, (source, target) = make_action(state, party, riverwind,  'longsword', clarion)
     prev_state = deepcopy(state)
     state = step(state, action)
-    hitroll = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.STR]) / 20
-    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.STR]) * hitroll
+    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
 
 
 def test_eldrich_blast(party):
@@ -222,8 +239,8 @@ def test_eldrich_blast(party):
     state, action, (source, target) = make_action(state, party, wyll,  'eldrich-blast', clarion)
     prev_state = deepcopy(state)
     state = step(state, action)
-    hitroll = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.CHA]) / 20
-    exp_damage = 5.5 * hitroll
+    hit_p = hitroll(source, target, Abilities.CHA)
+    exp_damage = 5.5 * hit_p
     assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
 
@@ -278,7 +295,7 @@ def test_poison_spray(party):
 
     state = init(party)
     spray = Actions['poison-spray']
-    action = encode_action(spray, 0, 1, 3)
+    action = encode_action(spray, 0, 1, 3, n_actions=len(Actions))
     prev_state = deepcopy(state)
     state = step(state, action)
     assert jnp.allclose(d_hp_target(prev_state, state, action), 6.5 * (8 + 2 + 3 - 3 - 2) / 20, atol=0.01)
@@ -325,18 +342,12 @@ def test_acid_arrow(party):
     assert not state.character.effect_active[*goldmoon, 0]
 
 
-def save(source, target, hitroll_type, ability):
-    dc = 8 + source.prof_bonus + source.attack_ability_mods[hitroll_type]
-    save_prob = (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
-    return save_prob, dc
-
-
 def test_hold_person(party):
     state = init(party)
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', joffrey)
     prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob, dc = save(source, target, constants.HitrollType.SPELL, Abilities.WIS)
+    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
 
     # expectation is joffrey will fail his saving throw 0.75
     assert state.character.conditions.shape == (2, 4, len(constants.Conditions))
@@ -373,12 +384,34 @@ def test_concentration(party):
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', joffrey)
     prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob, dc = save(source, target, constants.HitrollType.SPELL, Abilities.WIS)
+    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
     assert state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
+    assert state.character.concentrating[*goldmoon].any()
 
+    # concentration on the first spell should end
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', pikachu)
     prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob, dc = save(source, target, constants.HitrollType.SPELL, Abilities.WIS)
+    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
     assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
     assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
+    assert state.character.concentrating[*goldmoon].any()
+
+    # using an action that does not require concentration should not break concentration
+    state, action, (source, target) = make_action(state, party, goldmoon, 'longsword', pikachu)
+    state = step(state, action)
+    save_fail_prob, dc = save_throw_fail(source, target, constants.HitrollType.SPELL, Abilities.WIS)
+    assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
+    assert state.character.concentrating[*goldmoon].any()
+
+    for t in range(1, 6):
+        # taking damage should force a concentration check, first succeeds
+        state, action, (source, target) = make_action(state, party, joffrey, 'shortbow', goldmoon)
+        state = step(state, action)
+        hit_p = hitroll(source, target, hit_ability=Abilities.DEX)
+        concentration_succ_prob = 1 - hit_p * save_dc_fail(target, Abilities.CON, 10)
+        assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
+        assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** t > 0.5)
+        assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** t > 0.5)
+        assert jnp.allclose(state.character.concentration_check_cum[*goldmoon],  concentration_succ_prob ** t, atol=0.01)

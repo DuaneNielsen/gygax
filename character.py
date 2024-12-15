@@ -304,6 +304,7 @@ class CharacterExtra(Character):
 
         self.concentrating = [False] * constants.MAX_TARGETS
         self.concentration_ref = [[0, 0, 0]] * constants.MAX_TARGETS # player, character, effect_slot
+        self.concentration_check_cum = 1.0
 
     @property
     def hp(self):
