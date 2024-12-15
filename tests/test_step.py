@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import pytest
 from copy import deepcopy
 from constants import Party
+# jax.config.update('jax_platform_name', 'cpu')
 
 
 def d_hp_target(state: State, next_state: State, action):
@@ -380,13 +381,15 @@ def test_hold_person(party):
 
 
 def test_concentration(party):
+
+    # cast hold person on joffrey
     state = init(party)
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', joffrey)
     state = step(state, action)
     assert state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
     assert state.character.concentrating[*goldmoon].any()
 
-    # concentration on the first spell should end
+    # cast on pikachu, hold on joffrey should end
     state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', pikachu)
     state = step(state, action)
     assert not state.character.conditions[*joffrey, constants.Conditions.PARALYZED]
@@ -443,8 +446,17 @@ def test_concentration_from_spell_effects(party):
     assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** 3 > 0.5)
     assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], concentration_succ_prob ** 3, atol=0.01)
 
+    # three acid arrow spell effects should hit at once, breaking concentration
     state, action, (source, target) = make_action(state, party, goldmoon, 'end-turn', goldmoon)
     state = step(state, action)
     assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED] == (concentration_succ_prob ** 6 > 0.5)
     assert state.character.concentrating[*goldmoon].any() == (concentration_succ_prob ** 6 > 0.5)
     assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], concentration_succ_prob ** 6, atol=0.01)
+
+    # recast the spell, concentration check should reset
+    state = init(party)
+    state, action, (source, target) = make_action(state, party, goldmoon, 'hold-person', pikachu)
+    state = step(state, action)
+    assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
+    assert state.character.concentrating[*goldmoon].any()
+    assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], 1., atol=0.01)
