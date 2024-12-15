@@ -94,9 +94,13 @@ spell = ActionEntry(
 action_table = [
     spell.replace(name='end-turn'),
     item.replace(name='longsword', damage=4.5, damage_type=DamageType.SLASHING),
+    item.replace(name='longsword-two-hand', damage=5.5, damage_type=DamageType.SLASHING),
+    item.replace(name='rapier', damage=4.5, damage_type=DamageType.PIERCING),
+    item.replace(name='rapier-finesse', hitroll_type=HitrollType.FINESSE, damage=4.5, damage_type=DamageType.PIERCING),
     item.replace(name='longbow', hitroll_type=HitrollType.RANGED, damage=4.5, damage_type=DamageType.PIERCING),
     item.replace(name='shortbow', hitroll_type=HitrollType.RANGED, damage=3.5, damage_type=DamageType.PIERCING),
     spell.replace(name='eldrich-blast', damage=5.5, damage_type=DamageType.FORCE, req_hitroll=True),
+    spell.replace(name='agonizing-blast', damage=5.5, damage_type=DamageType.FORCE, req_hitroll=True, ability_mod_damage=True),
     spell.replace(name='poison-spray', damage=6.5, damage_type=DamageType.POISON, can_save=True, save=Abilities.CON,
                   save_mod=0.),
     spell.replace(name='burning-hands', damage=3 * 3.5, damage_type=DamageType.FIRE, can_save=True, save=Abilities.DEX,
@@ -296,7 +300,6 @@ def update_conditions(effect_active, effects):
     return effect_conditions.any(-2)
 
 
-
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
     source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
@@ -342,7 +345,8 @@ def step(state: State, action: Array):
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     # expectation of recurring damage is reduced if you didn't hit
-    weapon.recurring_damage = weapon.recurring_damage * hitroll_mul * recurring_dmg_save_mul * target.damage_type_mul[weapon.damage_type]
+    weapon.recurring_damage = weapon.recurring_damage * hitroll_mul * recurring_dmg_save_mul * target.damage_type_mul[
+        weapon.damage_type]
 
     # save_fail > 0.5 means the saving throw failed, so set a condition if required
     condition = jnp.where(weapon.inflicts_condition, save_fail_prob > 0.5, False)
@@ -391,17 +395,21 @@ def step(state: State, action: Array):
     # if effects caused damage, make concentration checks
     damaging_effects = (effects.recurring_damage > 0.) & prev_effect_active
     concentration_fail_prob = save_fail(Abilities.CON, 10, source)
-    concentration_check_cum = jnp.where(damaging_effects, 1 - effects.recurring_damage_hitroll * concentration_fail_prob, 1.).prod()
+    concentration_check_cum = jnp.where(damaging_effects,
+                                        1 - effects.recurring_damage_hitroll * concentration_fail_prob, 1.).prod()
     concentration_check_cum = concentration_check_cum * source.concentration_check_cum
     state.character.concentration_check_cum = update_character_if(action.source, target.concentrating.any() & end_turn,
                                                                   state.character.concentration_check_cum,
                                                                   concentration_check_cum)
-    concentration_check_fail = source.concentrating.any(-1) & damaging_effects.any() & (concentration_check_cum < 0.5) & end_turn
-    state.character.concentrating = update_character_if(action.source, concentration_check_fail, state.character.concentrating,
+    concentration_check_fail = source.concentrating.any(-1) & damaging_effects.any() & (
+            concentration_check_cum < 0.5) & end_turn
+    state.character.concentrating = update_character_if(action.source, concentration_check_fail,
+                                                        state.character.concentrating,
                                                         False)
     concentration_ref = state.character.concentration_ref[*action.source]
     effect_deactivated = state.character.effect_active.at[concentration_ref].set(False)
-    state.character.effect_active = jnp.where(concentration_check_fail, effect_deactivated, state.character.effect_active)
+    state.character.effect_active = jnp.where(concentration_check_fail, effect_deactivated,
+                                              state.character.effect_active)
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     if debug:

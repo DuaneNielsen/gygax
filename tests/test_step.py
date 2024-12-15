@@ -234,6 +234,24 @@ def test_longsword(party):
     state = step(state, action)
     assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
 
+    state, action, (source, target) = make_action(state, party, riverwind,  'longsword-two-hand', clarion)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert d_hp_target(prev_state, state, action) == (5.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+
+def test_rapier(party):
+    state = init(party)
+    state, action, (source, target) = make_action(state, party, jimmy,  'rapier', clarion)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+
+    state, action, (source, target) = make_action(state, party, jimmy,  'rapier-finesse', clarion)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.DEX]) * hitroll(source, target, Abilities.DEX)
+
+
 
 def test_eldrich_blast(party):
     state = init(party)
@@ -244,6 +262,11 @@ def test_eldrich_blast(party):
     exp_damage = 5.5 * hit_p
     assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
+    state, action, (source, target) = make_action(state, party, wyll,  'agonizing-blast', clarion)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    exp_damage = (5.5 + source.ability_mods[Abilities.CHA]) * hitroll(source, target, Abilities.CHA)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
 def test_vmap(party):
     state = init(party)
