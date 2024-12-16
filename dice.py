@@ -68,9 +68,9 @@ F(k) = P(min(X,Y) ≤ k) = 1 - P(both rolls > k)
 """
 
 cdf_d20_table = jnp.stack([
-    jax.lax.cumsum(jnp.ones(20)/20),
-    (jnp.arange(1, 21)/20) ** 2,
-    1 - (20 - jnp.arange(1, 21)) ** 2 / 400
+    jax.lax.cumsum(jnp.ones(20, dtype=jnp.float16)/20),
+    jnp.float16((jnp.arange(1, 21,)/20) ** 2),
+    jnp.float16(1 - (20 - jnp.arange(1, 21, )) ** 2 / 400)
 ])
 
 

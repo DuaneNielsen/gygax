@@ -102,7 +102,8 @@ action_table = [
     item.replace(name='longbow', hitroll_type=HitrollType.RANGED, damage=4.5, damage_type=DamageType.PIERCING),
     item.replace(name='shortbow', hitroll_type=HitrollType.RANGED, damage=3.5, damage_type=DamageType.PIERCING),
     spell.replace(name='eldrich-blast', damage=5.5, damage_type=DamageType.FORCE, req_hitroll=True),
-    spell.replace(name='agonizing-blast', damage=5.5, damage_type=DamageType.FORCE, req_hitroll=True, ability_mod_damage=True),
+    spell.replace(name='agonizing-blast', damage=5.5, damage_type=DamageType.FORCE, req_hitroll=True,
+                  ability_mod_damage=True),
     spell.replace(name='poison-spray', damage=6.5, damage_type=DamageType.POISON, can_save=True, save=Abilities.CON,
                   save_mod=0.),
     spell.replace(name='burning-hands', damage=3 * 3.5, damage_type=DamageType.FIRE, can_save=True, save=Abilities.DEX,
@@ -118,10 +119,6 @@ ActionsEnum = IntEnum('ActionsEnum', [a.name for a in action_table])
 
 action_table = [character.convert(a, ActionArray) for a in action_table]
 action_table = jax.tree.map(lambda *x: jnp.stack(x), *action_table)
-
-
-
-
 
 
 @chex.dataclass
@@ -306,6 +303,33 @@ def update_conditions(effect_active, effects):
     return effect_conditions.any(-2)
 
 
+def hitroll(source: Character, target: Character, weapon: ActionArray, roll_type: RollType = RollType.NORMAL,
+            crit: int = 20):
+    """
+
+    Args:
+        source: the attacking character
+        target: the target character
+        weapon: the action used
+        roll_type: NORMAL | ADVANTAGE | DISADVANTAGE
+        crit: rolling equal  or higher is considered a crit for double damage, default 20
+
+    Returns: hit_chance -> probability of hit
+             hit_dmg -> multiplier for expected damage
+             (hit_prob, crit_prob) crit_prob is the chance to crit, hit prob is the chance to hit normal,
+             hit_prob + crit_prob = hit_chance
+
+    """
+    source_ability_bonus = source.attack_ability_mods[weapon.hitroll_type]
+    effective_ac = target.ac - source.prof_bonus - source_ability_bonus
+    effective_ac = jnp.max(jnp.array([effective_ac, 1]))
+    hit_prob = cdf_20(crit - 1, roll_type) - cdf_20(effective_ac-1, roll_type)
+    crit_prob = 1. - cdf_20(crit - 1, roll_type)
+    hit_chance = hit_prob + crit_prob
+    hit_dmg = hit_prob + crit_prob * 2
+    return hit_chance, hit_dmg, (hit_prob, crit_prob)
+
+
 def step(state: State, action: Array):
     action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
     source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
@@ -318,15 +342,10 @@ def step(state: State, action: Array):
     state = break_concentration(state, weapon.req_concentration & source.concentrating.any(-1), action.source)
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
-    # hitroll for action
-
-    effective_ac = target.ac - source.prof_bonus - source_ability_bonus
-    hitroll = 1 - cdf_20(effective_ac-1)
-
-    # hitroll = 21 - target.ac + source.prof_bonus + source_ability_bonus
-    # hitroll = jnp.float16(hitroll).clip(1, 20) / 20
-    hitroll_mul = jnp.where(weapon.req_hitroll, hitroll, jnp.ones_like(hitroll))
-    weapon.recurring_damage_hitroll = hitroll_mul
+    # hit_prob is the chance of a normal hit, crit_prob chance of crit, chance of hit is the sum of the two
+    hit_chance, hit_dmg, _ = hitroll(source, target, weapon)
+    hit_dmg = jnp.where(weapon.req_hitroll, hit_dmg, 1.)
+    weapon.recurring_damage_hitroll = hit_chance
 
     # saving throw for action
     save_dc = 8 + source.prof_bonus + source_ability_bonus
@@ -341,12 +360,12 @@ def step(state: State, action: Array):
 
     # damage from action
     damage = weapon.damage + jnp.where(weapon.ability_mod_damage, source_ability_bonus, 0)
-    damage = damage * hitroll_mul * save_mul * target.damage_type_mul[weapon.damage_type]
+    damage = damage * hit_dmg * save_mul * target.damage_type_mul[weapon.damage_type]
     state.character.hp = state.character.hp.at[*action.target].subtract(damage)
 
     # target makes concentration check on hit
     check_concentration_on_hit = target.concentrating.any(-1) & (damage > 0)
-    concentration_check_cum = (1 - hitroll * save_fail(Abilities.CON, 10, target)) * target.concentration_check_cum
+    concentration_check_cum = (1 - hit_chance * save_fail(Abilities.CON, 10, target)) * target.concentration_check_cum
     concentration_check_fail = check_concentration_on_hit & (concentration_check_cum < 0.5)
     state = break_concentration(state, concentration_check_fail, action.target)
     state.character.concentration_check_cum = update_character_if(action.target, check_concentration_on_hit,
@@ -355,7 +374,7 @@ def step(state: State, action: Array):
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     # expectation of recurring damage is reduced if you didn't hit
-    weapon.recurring_damage = weapon.recurring_damage * hitroll_mul * recurring_dmg_save_mul * target.damage_type_mul[
+    weapon.recurring_damage = weapon.recurring_damage * hit_dmg * recurring_dmg_save_mul * target.damage_type_mul[
         weapon.damage_type]
 
     # save_fail > 0.5 means the saving throw failed, so set a condition if required
