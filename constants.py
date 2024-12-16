@@ -75,6 +75,13 @@ N_EFFECTS = 8
 # the max number of targets that a concentration spell can effect
 MAX_TARGETS=8
 
+
+class RollType(IntEnum):
+    NORMAL = 0
+    ADVANTAGE = 1
+    DISADVANTAGE = 2
+
+
 def create_sorted_enum(enum_name: str, keys: List[str]) -> type[IntEnum]:
     """
     Creates an IntEnum with keys sorted alphabetically and mapped to sequential integers.

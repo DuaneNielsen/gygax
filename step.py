@@ -16,6 +16,8 @@ from pgx.core import Array
 from character import JaxStringArray, DamageType
 import numpy as np
 from functools import partial
+from dataclasses import field
+from dice import cdf_20, RollType
 
 
 @chex.dataclass
@@ -116,6 +118,10 @@ ActionsEnum = IntEnum('ActionsEnum', [a.name for a in action_table])
 
 action_table = [character.convert(a, ActionArray) for a in action_table]
 action_table = jax.tree.map(lambda *x: jnp.stack(x), *action_table)
+
+
+
+
 
 
 @chex.dataclass
@@ -313,8 +319,12 @@ def step(state: State, action: Array):
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
     # hitroll for action
-    hitroll = 20 - target.ac + source.prof_bonus + source_ability_bonus
-    hitroll = jnp.float16(hitroll).clip(1, 20) / 20
+
+    effective_ac = target.ac - source.prof_bonus - source_ability_bonus
+    hitroll = 1 - cdf_20(effective_ac-1)
+
+    # hitroll = 21 - target.ac + source.prof_bonus + source_ability_bonus
+    # hitroll = jnp.float16(hitroll).clip(1, 20) / 20
     hitroll_mul = jnp.where(weapon.req_hitroll, hitroll, jnp.ones_like(hitroll))
     weapon.recurring_damage_hitroll = hitroll_mul
 

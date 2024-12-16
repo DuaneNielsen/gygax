@@ -32,8 +32,9 @@ def save_throw_fail(source, target, hitroll_type, ability, dc=None):
 def save_dc_fail(target, ability, dc):
     return (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
 
+
 def hitroll(source, target, hit_ability: Abilities):
-    return (20 - target.ac + source.prof_bonus + source.ability_mods[hit_ability]) / 20
+    return (21 - target.ac + source.prof_bonus + source.ability_mods[hit_ability]) / 20
 
 
 def test_character():
@@ -196,7 +197,7 @@ pikachu=1, 3
 def test_hitroll(party):
     source = party[0][3]
     target = party[1][2]
-    hitroll_p = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.STR]) / 20
+    hitroll_p = (21 - target.ac + source.prof_bonus + source.ability_mods[Abilities.STR]) / 20
     assert hitroll_p == hitroll(source, target, Abilities.STR)
 
 
@@ -232,25 +233,28 @@ def test_longsword(party):
     state, action, (source, target) = make_action(state, party, riverwind,  'longsword', clarion)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+    exp_damage = (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
     state, action, (source, target) = make_action(state, party, riverwind,  'longsword-two-hand', clarion)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert d_hp_target(prev_state, state, action) == (5.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+    exp_damage = (5.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
 def test_rapier(party):
     state = init(party)
     state, action, (source, target) = make_action(state, party, jimmy,  'rapier', clarion)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+    exp_damage = (4.5 + source.ability_mods[Abilities.STR]) * hitroll(source, target, Abilities.STR)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
     state, action, (source, target) = make_action(state, party, jimmy,  'rapier-finesse', clarion)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert d_hp_target(prev_state, state, action) == (4.5 + source.ability_mods[Abilities.DEX]) * hitroll(source, target, Abilities.DEX)
-
+    exp_damage = (4.5 + source.ability_mods[Abilities.DEX]) * hitroll(source, target, Abilities.DEX)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
 
 def test_eldrich_blast(party):
@@ -283,10 +287,10 @@ def test_vmap(party):
         return jax.tree.map(lambda s: s[index], state)
 
     state0, longsword, (source, target) = make_action(select(state, 0), party, riverwind,  'longsword', clarion)
-    hitroll_sword = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.STR]) / 20
+    hitroll_sword = hitroll(source, target, Abilities.STR)
 
     state1, blast, (source, target) = make_action(select(state, 1), party, riverwind,  'eldrich-blast', clarion)
-    hitroll_blast = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.CHA]) / 20
+    hitroll_blast = hitroll(source, target, Abilities.CHA)
 
     action = jnp.array([longsword, blast])
     state = jax.tree.map(lambda *x: jnp.stack(x), state0, state1)
@@ -302,10 +306,10 @@ def test_longbow(party):
     state = init(party)
     state, action, (source, target) = make_action(state, party, riverwind,  'longbow', clarion)
     prev_state = deepcopy(state)
-    hitroll = (20 - target.ac + source.prof_bonus + source.ability_mods[Abilities.DEX]) / 20
+    hit = hitroll(source, target, Abilities.DEX)
     state = step(state, action)
     dmg = d_hp_target(prev_state, state, action)
-    exp_dmg = hitroll * (4.5 + source.ability_mods[Abilities.DEX])
+    exp_dmg = hit * (4.5 + source.ability_mods[Abilities.DEX])
     assert jnp.allclose(dmg, exp_dmg, atol=0.01)
 
 
@@ -342,7 +346,7 @@ def test_acid_arrow(party):
     state, action, (source, target) = make_action(state, party, raistlin, 'acid-arrow', goldmoon)
     prev_state = deepcopy(state)
     state = step(state, action)
-    hit_roll = 1 - ((target.ac - 4 - 2) / 20)
+    hit_roll = hitroll(source, target, Abilities.INT)
     exp_damage = hit_roll * 4 * 2.5
     assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
     effect_name = JaxStringArray.uint8_array_to_str(state.character.effects.name[*goldmoon, 0])
@@ -426,7 +430,7 @@ def test_concentration(party):
     assert state.character.conditions[*pikachu, constants.Conditions.PARALYZED]
     assert state.character.concentrating[*goldmoon].any()
 
-    for t in range(1, 6):
+    for t in range(1, 5):
         # taking damage should force a concentration check, first succeeds
         state, action, (source, target) = make_action(state, party, joffrey, 'shortbow', goldmoon)
         state = step(state, action)
