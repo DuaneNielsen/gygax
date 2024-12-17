@@ -14,7 +14,7 @@ def test_conversion():
     assert condition_mod.hitroll == RollType.DISADVANTAGE
 
 
-def test_reduce():
+def test_stack_reduce():
     poisoned = convert(CONDITIONS[Conditions.POISONED], ConditionModArray)
     exhaustion = convert(CONDITIONS[Conditions.EXHAUSTION], ConditionModArray)
     condition_stack = jax.tree.map(lambda *x : jnp.stack(x), *[poisoned, exhaustion])
