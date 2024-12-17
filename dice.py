@@ -3,6 +3,9 @@ import jax.numpy as jnp
 import jax
 from enum import IntEnum
 
+from jax import numpy as jnp
+
+
 def parse_dice_notation(notation):
     pattern = r'(\d+)d(\d+)(?:\s*([-+])\s*(\d+))?'
     match = re.match(pattern, notation)
@@ -75,9 +78,10 @@ cdf_d20_table = jnp.stack([
 
 
 class RollType(IntEnum):
+    DISADVANTAGE = -1
     NORMAL=0
     ADVANTAGE=1
-    DISADVANTAGE=2
+
 
 
 def pdf_20(x, roll_type=0):
@@ -86,3 +90,27 @@ def pdf_20(x, roll_type=0):
 
 def cdf_20(x, roll_type=0):
     return cdf_d20_table[roll_type, x - 1]
+
+
+def ad_rule(rolltype, axis=0):
+    """
+    In D&D 5th Edition, when you have multiple effects that give both advantage and disadvantage on the same roll, they don't stack or accumulate. Instead, you follow what's commonly known as the "advantage/disadvantage cancellation rule."
+    The rule states that if a roll has at least one source of advantage and at least one source of disadvantage, you roll normally - they cancel each other out, regardless of how many sources of each you have. This is found in the Player's Handbook, Chapter 7, under "Advantage and Disadvantage."
+    So in your examples:
+
+    A poisoned character (disadvantage) attacking a target affected by Guiding Bolt (advantage) would roll normally, as they cancel out
+    A poisoned but invisible character (one source of disadvantage, one source of advantage) would also roll normally
+
+    Args:
+        rolltype: an array of RollType
+        axis: the axis to reduce
+
+    Returns: an array of rolltype reduced on the axis according to the advantage/disadvantage rule
+
+    """
+
+    rolltype = jnp.moveaxis(rolltype, axis, 0)
+    normal = jnp.zeros(rolltype.shape[1:], dtype=rolltype.dtype)
+    advantage = jnp.all(rolltype >= 0, axis=0)
+    disadvantage = jnp.all(rolltype <= 0, axis=0) * -1
+    return normal + advantage + disadvantage
