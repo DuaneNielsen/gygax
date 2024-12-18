@@ -1,5 +1,6 @@
 import pytest
-from constants import CharacterClass, Conditions, DamageType, Race
+from constants import CharacterClass, DamageType, Race
+from conditions import Conditions
 
 
 def test_character_classes():

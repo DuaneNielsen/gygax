@@ -2,6 +2,7 @@ import jax.numpy as jnp
 from numpy import genfromtxt
 import numpy as np
 
+import actions
 import constants
 import dnd5e
 import default_config
@@ -28,7 +29,7 @@ char_names = [list(default_config.default_config[ConfigItems.PARTY][party].keys(
 # def action_to_text(action: dnd5e.ActionTuple, char_names):
 #     pass
 def name(char_names, character: dnd5e.Character, i):
-    return char_names[character.party[i].item()][character.index[i].item()]
+    return char_names[actions.item()][actions.item()]
 
 def action_repr(char_names, actions, i):
     source = name(char_names, actions.source, i)

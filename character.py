@@ -1,99 +1,19 @@
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Container, List
 
+import conditions
 import constants
+from actions import ActionEntry, WeaponRange, unarmed
+from to_jax import C, convert
 from tree_serialization import CumBinType, OneHotType
 import chex
 from dnd_character import Character
-from dnd_character.SRD import SRD
-from dnd_character.equipment import _Item, Item
+from dnd_character.equipment import Item
 from jax import numpy as jnp
 from constants import DamageType, Party
 import dice
 from functools import partial
 import jax
-import numpy as np
-import dataclasses
-from constants import HitrollType, Conditions, Abilities, SaveFreq
-
-
-@dataclasses.dataclass
-class ActionEntry:
-    name: str = ''
-    damage: float = 0.
-    damage_type: int = DamageType.FORCE
-    req_hitroll: bool = False
-    hitroll_type: HitrollType = HitrollType.SPELL
-    ability_mod_damage: bool = False
-    inflicts_condition: bool = False
-    condition: Conditions = Conditions.POISONED
-    duration: int = 0  # rounds ( 6 seconds )
-    can_save: bool = False
-    save: Abilities = Abilities.CON
-    use_save_dc: bool = False
-    save_dc: int = 0
-    save_mod: float = 0.
-    cum_save: float = 0.
-    save_freq: SaveFreq = SaveFreq.END_TARGET_TURN
-    bonus_attacks: int = 0
-    bonus_spell_attacks: int = 0
-    recurring_damage: float = 0.
-    recurring_damage_save_mod: float = 0.
-    recurring_damage_hitroll: float = 1.
-    req_concentration: bool = False
-
-    def replace(self, **kwargs) -> 'ActionEntry':
-        return dataclasses.replace(self, **kwargs)
-
-
-def fix_length(text: str, target_length: int, fill_char=" ") -> str:
-    if len(text) > target_length:
-        return text[:target_length]
-    return text.ljust(target_length, fill_char)
-
-
-class JaxStringArray:
-    """
-    A class to represent strings in jax
-    """
-
-    @staticmethod
-    def str_to_uint8_array(text: str):
-        text = fix_length(text, 20)
-        # Convert string to bytes, then to uint8 array
-        return jnp.array(list(text.encode('utf-8')), dtype=jnp.uint8)
-
-    @staticmethod
-    def uint8_array_to_str(arr):
-        # Convert uint8 array to bytes, then to string
-        arr_cpu = np.asarray(arr)
-        return bytes(arr_cpu).decode('utf-8').strip()
-
-
-class WeaponRange(StrEnum):
-    MELEE = 'Melee'
-    RANGED = 'Ranged'
-
-
-unarmed = _Item(
-    index="unarmed",
-    name="unarmed",
-    equipment_category=SRD('/api/equipment-categories/weapon'),
-    weapon_category='Simple',
-    weapon_range=WeaponRange.MELEE,
-    range={'normal': 5},
-    damage={
-        'damage_dice': '1d1',
-        'damage_type': SRD('/api/damage-types/bludgeoning')
-    },
-    contents=None,
-    cost=0,
-    desc='unarmed attack',
-    properties=[],
-    special=None,
-    url=None
-)
+from constants import Abilities
 
 
 @chex.dataclass
@@ -299,7 +219,7 @@ class CharacterExtra(Character):
         self._ranged_two_hand = None
         self._armor = None
 
-        self.conditions = [False] * len(constants.Conditions)
+        self.conditions = [False] * len(conditions.Conditions)
         self.effect_active = [False] * constants.N_EFFECTS
         self.effects = [ActionEntry()] * constants.N_EFFECTS
 
@@ -541,51 +461,7 @@ class CharacterExtra(Character):
             return None
 
 
-from typing import TypeVar
-
-C = TypeVar('C')
-
-
-def default_values(clazz: C) -> C:
-    kwargs = {}
-    for field_name, field_info in clazz.__dataclass_fields__.items():
-        if issubclass(field_info.type, Container):
-            kwargs[field_name] = default_values(field_info.type)
-        else:
-            kwargs[field_name] = jnp.array(jnp.zeros(1, dtype=field_info.type))
-    return clazz(**kwargs)
-
-
-
-
-def convert(character: CharacterExtra, clazz: C) -> C:
-    kwargs = {}
-    for field_name, field_info in clazz.__dataclass_fields__.items():
-
-        if issubclass(field_info.type, Container):
-            field_value = getattr(character, field_name)
-            if field_value is not None:
-                kwargs[field_name] = convert(field_value, field_info.type)
-            else:
-                kwargs[field_name] = default_values(field_info.type)
-        elif issubclass(field_info.type, JaxStringArray):
-            if type(character) is list:
-                expanded_arrays = [JaxStringArray.str_to_uint8_array(getattr(s, field_name)) for s in character]
-                kwargs[field_name] = jnp.stack(expanded_arrays)
-            else:
-                field_value = getattr(character, field_name)
-                kwargs[field_name] = JaxStringArray.str_to_uint8_array(field_value)
-        else:
-            if type(character) is list:
-                expanded_arrays = [getattr(x, field_name) for x in character]
-                kwargs[field_name] = jnp.array(expanded_arrays, dtype=field_info.type)
-            else:
-                kwargs[field_name] = jnp.array(getattr(character, field_name), dtype=field_info.type)
-
-    return clazz(**kwargs)
-
-
-from typing import Tuple, Dict, List
+from typing import Dict, List
 
 
 def stack_party(party: Dict[str, List[CharacterExtra]], clazz: C) -> C:

@@ -1,17 +1,16 @@
 import pytest
 
-import action_resources
+import actions
 import constants
 import dnd5e
 from pgx.experimental import act_randomly
 import jax
-import jax.numpy as jnp
+
+from conditions import Conditions
 from constants import *
 import turn_tracker
 from constants import Abilities
-import equipment.weapons as weapons
 import default_config
-from pgx.core import Array
 
 
 @pytest.fixture
@@ -284,7 +283,7 @@ def test_env_step():
     ]))
 
     for name, index in characters.items():
-        print(name, state.scene.party.hitpoints[index].item())
+        print(name, actions.item())
 
 
 def test_legal_actions():

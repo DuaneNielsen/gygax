@@ -4,7 +4,9 @@ from pytest import fixture
 import constants
 from constants import *
 from default_config import default_config
-from character import stack_party, CharacterExtra, AbilitiesArray, AbilityModifierObservation, WeaponArray, WeaponObservation, convert, CharacterArray, CharacterObservation
+from character import stack_party, CharacterExtra, AbilitiesArray, AbilityModifierObservation, WeaponArray, WeaponObservation, \
+    CharacterArray, CharacterObservation
+from to_jax import convert
 from dnd_character import CLASSES
 from dnd_character.equipment import Item
 from character import AC_LOWER, ABILITY_MODIFIER_LOWER

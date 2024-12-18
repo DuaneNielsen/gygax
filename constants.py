@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from enum import StrEnum, Enum, auto, IntEnum
+from enum import StrEnum, auto, IntEnum
 from dnd_character.SRD import SRD, SRD_endpoints
 from typing import List
 
@@ -75,13 +75,6 @@ N_EFFECTS = 8
 # the max number of targets that a concentration spell can effect
 MAX_TARGETS=8
 
-
-class RollType(IntEnum):
-    NORMAL = 0
-    ADVANTAGE = 1
-    DISADVANTAGE = 2
-
-
 def create_sorted_enum(enum_name: str, keys: List[str]) -> type[IntEnum]:
     """
     Creates an IntEnum with keys sorted alphabetically and mapped to sequential integers.
@@ -111,7 +104,6 @@ def lookup_srd_key(endpoint):
 
 DamageType = create_sorted_enum('DamageType', lookup_srd_key('damage-types').keys())
 CharacterClass = create_sorted_enum('CharacterClass', lookup_srd_key('classes').keys())
-Conditions = create_sorted_enum('Conditions', lookup_srd_key('conditions').keys())
 Race = create_sorted_enum('Race', lookup_srd_key('races').keys())
 
 

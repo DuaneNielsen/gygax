@@ -1,20 +1,15 @@
 # public modules
 
 import jax
-import jax.nn as nn
 from pgx.core import Array
 import pgx.core as core
-import chex
 
 import action_resources
+import actions
 from action_resources import legal_actions_by_action_resource, legal_actions_by_player_position
+from conditions import Conditions
 from constants import *
-import constants
 import turn_tracker
-import dice
-from equipment.equipment import Equipment, EquipmentType
-import equipment.armor as armor
-import equipment.weapons as weapons
 from collections import namedtuple
 from tree_serialization import convert_to_observation
 from default_config import default_config
@@ -209,8 +204,8 @@ def end_turn(state, action):
 
 
 def print_damage(char_names, amount, party, index):
-    target = char_names[party.item(), index.item()]
-    print(f'damage {amount.item()} {target}')
+    target = char_names[actions.item(), actions.item()]
+    print(f'damage {actions.item()} {target}')
 
 
 def apply_damage(state: State, target: Character, weapon: WeaponArray):
@@ -236,7 +231,7 @@ global char_names
 
 def repr_action(action: ActionTuple):
     def name(char_names, character: Character):
-        return char_names[character.party.item()][character.index.item()]
+        return char_names[actions.item()][character.index.item()]
 
     global char_names
     source = name(char_names, action.source)

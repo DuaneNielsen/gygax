@@ -1,4 +1,6 @@
-from character import WeaponRange, DamageType, CharacterArray, CharacterExtra, convert
+from character import DamageType, CharacterArray, CharacterExtra
+from actions import WeaponRange
+from to_jax import convert
 from dnd_character import CLASSES
 from dnd_character.equipment import Item
 from constants import ConfigItems, Party

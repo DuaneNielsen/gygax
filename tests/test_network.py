@@ -2,6 +2,7 @@ import jax
 from flax import nnx
 import jax.numpy as jnp
 
+import actions
 import train
 from constants import *
 from funcs import create_argmin_mask
@@ -220,7 +221,7 @@ def test_network():
         losses = []
         for obs, target_policy, target_value in zip(train_observation, train_policy, train_value):
             loss = train_step(model, optimizer, obs, target_policy, target_value)
-            losses.append(loss.item())
+            losses.append(actions.item())
             # plot.update(model.linear.kernel.value[:, 0])
         print(f'loss {mean(losses)}')
 

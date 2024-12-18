@@ -2,13 +2,13 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
 import seaborn as sns
-import jax.numpy as jnp
 from abc import ABC
 from matplotlib.pyplot import axes
-from typing import Protocol, Callable, Optional, Dict, List
+from typing import Protocol, Optional
 from dataclasses import dataclass
 
-import train
+import actions
+from conditions import Conditions
 from constants import *
 from default_config import default_config
 
@@ -68,7 +68,7 @@ class HistogramPlot(Plot):
 
     def refresh(self, state):
         data = self.data(state)
-        character_names = get_character_names(state, (state.current_player.item() + self.player) % 2)
+        character_names = get_character_names(state, (actions.item() + self.player) % 2)
 
         heatmap = self.ax.collections[0]
 
@@ -124,7 +124,7 @@ class CharacterDataVisualizer:
         self.right_pos = None
 
     def create_visualization(self):
-        current_player = self.state.current_player.item()
+        current_player = actions.item()
         enemy_player = (current_player + 1) % 2
 
         self.left_pos = PositionPlot(self.fig.add_subplot(self.gs[0, 0]),
@@ -190,7 +190,7 @@ class CharacterDataVisualizer:
 
     def refresh(self, state):
         self.state = state
-        current_player = state.current_player.item()
+        current_player = actions.item()
         enemy_player = (current_player + 1) % 2
 
         self.left_pos.refresh(state.scene.party.pos[current_player])
@@ -359,7 +359,7 @@ class ActionGrid:
 
     def refresh(self, state):
         """Update grid for new state"""
-        names = get_character_names(state, state.current_player.item())
+        names = get_character_names(state, actions.item())
         for char_idx, ax in enumerate(self.axs):
             ax.set_title(names[char_idx])
         self._update_button_colors(state)

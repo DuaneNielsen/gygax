@@ -4,7 +4,9 @@ from dnd_character.equipment import Item
 import jax.numpy as jnp
 
 import constants
-from character import WeaponRange, DamageType, CharacterArray, CharacterExtra, convert
+from character import DamageType, CharacterArray, CharacterExtra
+from actions import WeaponRange
+from to_jax import convert
 
 
 def test_equip_longsword():

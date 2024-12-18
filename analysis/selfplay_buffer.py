@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 from pathlib import Path
 
+import actions
 import train
 from typing import Optional, Sequence, Callable
 from train import SelfplayOutput, Embeddings, Checksums
@@ -35,7 +36,7 @@ def convert_tree_to_graph(
     batch_size = tree.node_values.shape[0]
 
     def node_to_str(node_i, reward=0, discount=1):
-        terminated = tree.embeddings.terminated[batch_index, node_i].item()
+        terminated = actions.item()
         color = "red" if terminated else "blue"
         return (f"{node_i}\n"
                 f"Reward: {reward:.2f}\n"
