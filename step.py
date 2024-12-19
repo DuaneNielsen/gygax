@@ -10,12 +10,10 @@ from pgx import EnvId
 import actions
 import character
 import conditions
-import constants
-import to_jax
 from character import CharacterExtra, stack_party
 from actions import ActionEntry, ActionArray, action_table, Actions
 from constants import HitrollType, N_PLAYERS, N_CHARACTERS, Abilities, SaveFreq
-from conditions import Conditions
+from conditions import Conditions, map_reduce, hitroll_adv_dis, ConditionModArray
 from dnd5e import ActionTuple, decode_action
 from pgx.core import Array
 from character import DamageType
@@ -114,7 +112,7 @@ def print_step(*args):
     print(step_to_str(*args))
 
 
-def save_fail(save, save_dc, target):
+def save_fail(save, save_dc, target, roll_type=RollType.NORMAL):
     """
     Probability of target failing the saving throw
     Args:
@@ -127,7 +125,7 @@ def save_fail(save, save_dc, target):
     """
     target_bonus_save = target.prof_bonus * target.save_bonus[save] + target.ability_mods[save]
     save_hurdle = save_dc - target_bonus_save
-    return jnp.float16(save_hurdle).clip(1, 20) / 20
+    return cdf_20(save_hurdle - 1, roll_type)
 
 
 vmap_save_fail = jax.vmap(save_fail, in_axes=(0, 0, None))
@@ -146,7 +144,7 @@ def update_character_if(character, cond, leaf, value):
     return jnp.where(cond, updated, leaf)
 
 
-def step_effect(effect: ActionArray, character):
+def step_effect(effect: ActionArray, character: Character, condition_mods: ConditionModArray):
     """
     Steps the effects on a character 1 step forward
       duration -- duration is reduced by 1 round each step, effect is deactivated when duration is 0
@@ -156,13 +154,14 @@ def step_effect(effect: ActionArray, character):
 
     Args:
         effect: ActionArray (N_EFFECTS, ...)
-        character: CharacterArray, pytree representing a single character
+        character: Character, pytree representing a single character
 
     Returns: effect active: bool (N_EFFECTS), effect: ActionArray (N_EFFECTS)
 
     """
     # saving throws to resist active effects
-    effect_save_fail_prob = save_fail(effect.save, effect.save_dc, character)
+    effect_save_fail_prob = save_fail(effect.save, effect.save_dc, character, roll_type=condition_mods.saving_throw[effect.save])
+    effect_save_fail_prob = jnp.where(condition_mods.saving_throw_fail[effect.save], 1., effect_save_fail_prob)
     effect.cum_save = effect.cum_save * effect_save_fail_prob
     effect.cum_save = jnp.where(effect.cum_save > 0.5, effect.cum_save, jnp.zeros_like(effect.cum_save))
     effect.inflicts_condition = jnp.where(effect.inflicts_condition, effect.cum_save > 0.5, False)
@@ -249,8 +248,12 @@ def step(state: State, action: Array):
     state = break_concentration(state, weapon.req_concentration & source.concentrating.any(-1), action.source)
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
+    source_condition_mods = map_reduce(source.conditions)
+    target_condition_mods = map_reduce(target.conditions)
+    hitroll_condition_mods = hitroll_adv_dis(source_condition_mods, target_condition_mods)
+
     # hit_prob is the chance of a normal hit, crit_prob chance of crit, chance of hit is the sum of the two
-    hit_chance, hit_dmg, _ = hitroll(source, target, weapon)
+    hit_chance, hit_dmg, _ = hitroll(source, target, weapon, roll_type=hitroll_condition_mods)
     hit_dmg = jnp.where(weapon.req_hitroll, hit_dmg, 1.)
     weapon.recurring_damage_hitroll = hit_chance
 
@@ -259,7 +262,8 @@ def step(state: State, action: Array):
     save_dc = jnp.where(weapon.use_save_dc, weapon.save_dc, save_dc)
     weapon.save_dc = save_dc  # remember for subsequent saves
 
-    save_fail_prob = save_fail(weapon.save, save_dc, target)
+    save_fail_prob = save_fail(weapon.save, save_dc, target, roll_type=target_condition_mods.saving_throw[weapon.save])
+    save_fail_prob = jnp.where(target_condition_mods.saving_throw_fail[weapon.save], 1., save_fail_prob)
     save_mul = save_fail_prob + (1 - save_fail_prob) * weapon.save_mod
     save_mul = jnp.where(weapon.can_save, save_mul, jnp.ones_like(save_mul))
     recurring_dmg_save_mul = save_fail_prob + (1 - save_fail_prob) * weapon.recurring_damage_save_mod
@@ -272,7 +276,9 @@ def step(state: State, action: Array):
 
     # target makes concentration check on hit
     check_concentration_on_hit = target.concentrating.any(-1) & (damage > 0)
-    concentration_check_cum = (1 - hit_chance * save_fail(Abilities.CON, 10, target)) * target.concentration_check_cum
+    concentration_fail = save_fail(Abilities.CON, 10, target, target_condition_mods.saving_throw[weapon.save])
+    concentration_fail = jnp.where(target_condition_mods.saving_throw_fail[weapon.save], 1., concentration_fail)
+    concentration_check_cum = (1 - hit_chance * concentration_fail) * target.concentration_check_cum
     concentration_check_fail = check_concentration_on_hit & (concentration_check_cum < 0.5)
     state = break_concentration(state, concentration_check_fail, action.target)
     state.character.concentration_check_cum = update_character_if(action.target, check_concentration_on_hit,
@@ -314,7 +320,7 @@ def step(state: State, action: Array):
 
     prev_effect_active = state.character.effect_active[*action.source]
     effects: ActionArray = jax.tree.map(lambda s: s[*action.source], state.character.effects)
-    effect_active, effects = jax.vmap(step_effect, in_axes=(0, None))(effects, source)
+    effect_active, effects = jax.vmap(step_effect, in_axes=(0, None, None))(effects, source, source_condition_mods)
 
     # reduce effects to a change in character state
     conditions = update_conditions(effect_active, effects)
@@ -330,7 +336,7 @@ def step(state: State, action: Array):
 
     # if effects caused damage, make concentration checks
     damaging_effects = (effects.recurring_damage > 0.) & prev_effect_active
-    concentration_fail_prob = save_fail(Abilities.CON, 10, source)
+    concentration_fail_prob = save_fail(Abilities.CON, 10, source, source_condition_mods.saving_throw[Abilities.CON])
     concentration_check_cum = jnp.where(damaging_effects,
                                         1 - effects.recurring_damage_hitroll * concentration_fail_prob, 1.).prod()
     concentration_check_cum = concentration_check_cum * source.concentration_check_cum

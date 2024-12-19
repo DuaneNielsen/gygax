@@ -1,7 +1,7 @@
 import conditions
 import constants
 from step import hitroll
-from step import init, step, State, Character
+from step import init, step, State, Character, save_fail
 from actions import action_table, Actions
 from dice import RollType
 from dnd5e import encode_action, ActionTuple, decode_action
@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import pytest
 from copy import deepcopy
 from constants import Party
+
 # jax.config.update('jax_platform_name', 'cpu')
 
 
@@ -30,12 +31,12 @@ def d_hp_source(state: State, next_state: State, action):
 def save_throw_fail(source, target, hitroll_type, ability, dc=None):
     source_dc = 8 + source.prof_bonus + source.attack_ability_mods[hitroll_type]
     dc = source_dc if dc is None else dc
-    save_prob = (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
+    save_prob = (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus - 1) / 20
     return save_prob, dc
 
 
 def save_dc_fail(target, ability, dc):
-    return (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus) / 20
+    return (dc - target.ability_mods[ability] - target.save_bonus[ability] * target.prof_bonus - 1) / 20
 
 
 def test_character():
@@ -99,7 +100,7 @@ def party():
         classs=CLASSES["cleric"],
         strength=10,
         dexterity=12,
-        constitution=16,
+        constitution=18,
         intelligence=10,
         wisdom=18,
         charisma=10
@@ -145,7 +146,7 @@ def party():
         dexterity=18,
         constitution=8,
         intelligence=14,
-        wisdom=8,
+        wisdom=6,
         charisma=14
     )
     joffrey.armor = Item('leather-armor')
@@ -200,7 +201,7 @@ def test_init(party):
 
     assert state.character.hp.shape == (2, 4)
     assert jnp.allclose(state.character.hp, jnp.float16([
-        [11, 8, 11, 13],
+        [11, 8, 12, 13],
         [9, 7, 11, 13],
     ]))
     name = JaxStringArray.uint8_array_to_str(state.character.name[0, 0])
@@ -247,6 +248,16 @@ def test_hitroll(party):
     assert jnp.allclose(crit_prob, 0.0025, atol=0.01)
     assert jnp.allclose(hit_prob, 0.0425 + 0.0375 + 0.0325 + 0.0275 + 0.0225 + 0.0175 + 0.0125 + 0.0075, atol=0.01)
 
+
+def test_save_throw(party):
+    state = init(party)
+    save_dc = jnp.array([10])
+    target: Character = jax.tree.map(lambda x: x[*goldmoon], state.character)
+    save = save_fail(Abilities.WIS, save_dc, target)
+    assert jnp.allclose((10 - 2 - target.ability_mods[Abilities.WIS] - 1) / 20, save, atol=0.01)
+
+    save = save_fail(Abilities.STR, save_dc, target)
+    assert jnp.allclose((10 - target.ability_mods[Abilities.STR] - 1) / 20, save, atol=0.01)
 
 
 def make_action(state, party, source, action_str, target, roll_type: RollType = RollType.NORMAL):
@@ -352,25 +363,26 @@ def test_longbow(party):
 def test_poison_spray(party):
     state = init(party)
     state, action, (source, target), (hit_chance, hit_dmg) = make_action(state, party, wyll, 'poison-spray', joffrey)
+    fail_save, dc = save_throw_fail(source, target, hitroll_type=constants.HitrollType.SPELL, ability=Abilities.CON)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert d_hp_target(prev_state, state, action) == 6.5 * (8 + 2 + 3 + 1) / 20
+    assert jnp.allclose(d_hp_target(prev_state, state, action), 6.5 * fail_save, atol=0.01)
 
     state = init(party)
     state, action, (source, target), (hit_chance, hit_dmg) = make_action(state, party, wyll, 'poison-spray', pikachu)
+    fail_save, dc = save_throw_fail(source, target, hitroll_type=constants.HitrollType.SPELL, ability=Abilities.CON)
     prev_state = deepcopy(state)
     state = step(state, action)
-    assert jnp.allclose(d_hp_target(prev_state, state, action), 6.5 * (8 + 2 + 3 - 3 - 2) / 20, atol=0.01)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), 6.5 * fail_save, atol=0.01)
 
 
 def test_burning_hands(party):
     state = init(party)
-    burning_hands = Actions['burning-hands']
     state, action, (source, target), (hit_chance, hit_dmg) = make_action(state, party, wyll, 'burning-hands', joffrey)
+    fail_save, dc = save_throw_fail(source, target, hitroll_type=constants.HitrollType.SPELL, ability=Abilities.DEX)
     prev_state = deepcopy(state)
     state = step(state, action)
-    save_fail_prob = (8 + 2 + 3 - 3 - 3) / 20
-    exp_damage = (save_fail_prob + (1-save_fail_prob) * 0.5) * 3.5 * 3
+    exp_damage = (fail_save + (1-fail_save) * 0.5) * 3.5 * 3
     assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
 
 
@@ -416,7 +428,7 @@ def test_hold_person(party):
     assert state.character.conditions[*joffrey, conditions.Conditions.PARALYZED]
     assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
     assert state.character.effect_active[1, 1, 0]
-    assert state.character.effects.cum_save[1, 1, 0] == save_fail_prob
+    assert jnp.allclose(state.character.effects.cum_save[1, 1, 0], save_fail_prob, atol=0.01)
     assert state.character.effects.save_dc[1, 1, 0] == dc
 
     # second attempt at save will also fail in the expectation (0.567 chance of fail)
@@ -427,7 +439,7 @@ def test_hold_person(party):
     assert state.character.conditions[1, 1, conditions.Conditions.PARALYZED]
     assert JaxStringArray.uint8_array_to_str(state.character.effects.name[1, 1, 0]) == 'hold-person'
     assert state.character.effect_active[1, 1, 0]
-    assert state.character.effects.cum_save[1, 1, 0] == save_fail_prob ** 2
+    assert jnp.allclose(state.character.effects.cum_save[1, 1, 0], save_fail_prob**2, atol=0.01)
 
     # third will succeed (0.42 chance of fail)
     state, action, (source, target), (hit_chance, hit_dmg) = make_action(state, party, joffrey, 'end-turn', joffrey)

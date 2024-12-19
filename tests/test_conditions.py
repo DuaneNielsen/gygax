@@ -4,6 +4,7 @@ from conditions import reduce, hitroll_adv_dis, Conditions, map_reduce
 from dice import RollType
 import jax.numpy as jnp
 import jax
+from constants import Abilities
 
 
 def as_bool_array(condition: Conditions):
@@ -28,7 +29,7 @@ def test_stack_reduce_poison_exhaustion():
     assert reduced.melee_target_hitroll == RollType.NORMAL
     assert reduced.incapacitated == False
     assert jnp.allclose(reduced.ability_check, RollType.DISADVANTAGE)
-    assert jnp.allclose(reduced.saving_throw, RollType.DISADVANTAGE)
+    assert jnp.allclose(reduced.saving_throw[Abilities.WIS], RollType.DISADVANTAGE)
     assert jnp.allclose(reduced.saving_throw_fail, False)
     assert reduced.melee_target_damage_mul == 1.
     assert jnp.allclose(reduced.damage_resistance, 1.)

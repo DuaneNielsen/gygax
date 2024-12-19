@@ -114,7 +114,7 @@ def reduce(a: ConditionModArray, axis=0) -> ConditionModArray:
         incapacitated=a.incapacitated.any(0),
         ability_check=ad_rule(a.ability_check),
         saving_throw=ad_rule(a.saving_throw),
-        saving_throw_fail=a.saving_throw_fail.any(),
+        saving_throw_fail=a.saving_throw_fail.any(0),
         damage_resistance=jnp.prod(a.damage_resistance, axis=0)
     )
 
