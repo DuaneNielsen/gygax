@@ -248,6 +248,16 @@ def test_hitroll(party):
     assert jnp.allclose(crit_prob, 0.0025, atol=0.01)
     assert jnp.allclose(hit_prob, 0.0425 + 0.0375 + 0.0325 + 0.0275 + 0.0225 + 0.0175 + 0.0125 + 0.0075, atol=0.01)
 
+    hit_chance, _, (hit_prob, crit_prob) = hitroll(source, target, weapon, RollType.NORMAL, auto_crit=True)
+    assert crit_prob.dtype == jnp.float16
+    assert jnp.allclose(crit_prob, 0.45, atol=0.01)
+    assert jnp.allclose(hit_prob, 0, atol=0.01)
+
+    hit_chance, _, (hit_prob, crit_prob) = hitroll(source, target, weapon, RollType.DISADVANTAGE, auto_crit=True)
+    assert crit_prob.dtype == jnp.float16
+    assert jnp.allclose(crit_prob, 0.0025 + 0.0425 + 0.0375 + 0.0325 + 0.0275 + 0.0225 + 0.0175 + 0.0125 + 0.0075, atol=0.01)
+    assert jnp.allclose(hit_prob, 0, atol=0.01)
+
 
 def test_save_throw(party):
     state = init(party)
@@ -260,7 +270,7 @@ def test_save_throw(party):
     assert jnp.allclose((10 - target.ability_mods[Abilities.STR] - 1) / 20, save, atol=0.01)
 
 
-def make_action(state, party, source, action_str, target, roll_type: RollType = RollType.NORMAL):
+def make_action(state, party, source, action_str, target, roll_type: RollType = RollType.NORMAL, auto_crit=False):
     source_char = party[source[0]][source[1]]
     target_char = party[target[0]][target[1]]
     source_char_idx = source[1]
@@ -273,7 +283,7 @@ def make_action(state, party, source, action_str, target, roll_type: RollType = 
     source = jax.tree.map(lambda x: x[*source], state.character)
     weapon = jax.tree.map(lambda action_items: action_items[action.action], action_table)
     target: Character = jax.tree.map(lambda x: x[target_char_party, target_char_idx], state.character)
-    hit_chance, hit_dmg, _ = hitroll(source, target, weapon, roll_type)
+    hit_chance, hit_dmg, _ = hitroll(source, target, weapon, roll_type, auto_crit=auto_crit)
     return state, encoded_action,  (source_char, target_char), (hit_chance, hit_dmg)
 
 
@@ -431,6 +441,14 @@ def test_hold_person(party):
     assert jnp.allclose(state.character.effects.cum_save[1, 1, 0], save_fail_prob, atol=0.01)
     assert state.character.effects.save_dc[1, 1, 0] == dc
 
+    # verify that hit damage on joffrey is increased
+    state, action, (source, target), (hit_chance, hit_dmg) = make_action(state, party, riverwind, 'longsword', joffrey, RollType.ADVANTAGE, auto_crit=True)
+    prev_state = deepcopy(state)
+    state = step(state, action)
+    exp_damage = (4.5 + source.ability_mods[Abilities.STR]) * hit_dmg
+    assert jnp.allclose(hit_chance, hit_dmg / 2, atol=0.01)
+    assert jnp.allclose(d_hp_target(prev_state, state, action), exp_damage, atol=0.01)
+
     # second attempt at save will also fail in the expectation (0.567 chance of fail)
     state, action, (source, target), (hit_chance, hit_dmg) = make_action(state, party, joffrey, 'end-turn', joffrey)
     prev_state = deepcopy(state)
@@ -529,3 +547,4 @@ def test_concentration_from_spell_effects(party):
     assert state.character.conditions[*pikachu, conditions.Conditions.PARALYZED]
     assert state.character.concentrating[*goldmoon].any()
     assert jnp.allclose(state.character.concentration_check_cum[*goldmoon], 1., atol=0.01)
+

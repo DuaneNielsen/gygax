@@ -18,10 +18,11 @@ class ConditionMod:
     hitroll: RollType = RollType.NORMAL
     target_hitroll: RollType = RollType.NORMAL
     melee_target_hitroll: RollType = RollType.NORMAL
-    melee_target_damage_mul: float = 1.
+    melee_target_auto_crit: bool = False
     incapacitated: bool = False
     ability_check: List[RollType] = field(default_factory=lambda: [RollType.NORMAL] * len(Abilities))
     saving_throw: List[RollType] = field(default_factory=lambda: [RollType.NORMAL] * len(Abilities))
+    saving_throw_damage_type: List[RollType] = field(default_factory=lambda: [RollType.NORMAL] * len(DamageType))
     saving_throw_fail: List[bool] = field(default_factory=lambda: [False] * len(Abilities))
     damage_resistance: List[float] = field(default_factory=lambda: [1.] * len(DamageType))
 
@@ -33,7 +34,7 @@ class ConditionModArray:
     hitroll: jnp.int8
     target_hitroll: jnp.int8
     melee_target_hitroll: jnp.int8
-    melee_target_damage_mul: jnp.float16
+    melee_target_auto_crit: jnp.bool
     incapacitated: jnp.bool
     ability_check: jnp.int8
     saving_throw: jnp.int8
@@ -43,6 +44,8 @@ class ConditionModArray:
 
 FAIL_STR_DEX = [True, True, False, False, False, False]
 RESIST_ALL_DMG = [0.5] * len(DamageType)
+RESIST_POISON = [1.] * len(DamageType)
+RESIST_POISON[DamageType.POISON] = [0.5]
 IMMUNE_POISON_RESIST_ALL = [0.5] * len(DamageType)
 IMMUNE_POISON_RESIST_ALL[DamageType.POISON] = 0.
 DISADVANTAGE_DEX=[RollType.NORMAL] * len(Abilities)
@@ -66,6 +69,7 @@ class Conditions(IntEnum):
     RESTRAINED = auto()
     STUNNED = auto()
     UNCONSCIOUS = auto()
+    PROTECTED_POISON = auto()
 
 
 CONDITIONS = sorted([
@@ -77,13 +81,14 @@ CONDITIONS = sorted([
     ConditionMod('grappled', Conditions.GRAPPLED),
     ConditionMod('incapacitated', Conditions.INCAPACITATED, incapacitated=True),
     ConditionMod('invisible', Conditions.INVISIBLE, hitroll=RollType.ADVANTAGE, target_hitroll=RollType.DISADVANTAGE),
-    ConditionMod('paralysed', Conditions.PARALYZED, target_hitroll=RollType.ADVANTAGE, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, melee_target_damage_mul=2.),
+    ConditionMod('paralysed', Conditions.PARALYZED, target_hitroll=RollType.ADVANTAGE, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, melee_target_auto_crit=True),
     ConditionMod('petrified', Conditions.PETRIFIED, incapacitated=True, target_hitroll=RollType.ADVANTAGE, saving_throw_fail=FAIL_STR_DEX, damage_resistance=IMMUNE_POISON_RESIST_ALL),
     ConditionMod('poisoned', Conditions.POISONED, hitroll=RollType.DISADVANTAGE, ability_check=DISADVANTAGE_ALL),
     ConditionMod('prone', Conditions.PRONE, hitroll=RollType.DISADVANTAGE, melee_target_hitroll=RollType.ADVANTAGE, target_hitroll=RollType.DISADVANTAGE),
     ConditionMod('restrained', Conditions.RESTRAINED, hitroll=RollType.DISADVANTAGE, target_hitroll=RollType.ADVANTAGE, saving_throw=DISADVANTAGE_DEX),
     ConditionMod('stunned', Conditions.STUNNED, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, target_hitroll=RollType.ADVANTAGE),
-    ConditionMod('unconscious', Conditions.UNCONSCIOUS, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, target_hitroll=RollType.ADVANTAGE, melee_target_damage_mul=2.)
+    ConditionMod('unconscious', Conditions.UNCONSCIOUS, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, target_hitroll=RollType.ADVANTAGE, melee_target_auto_crit=True),
+    ConditionMod('protected-poison', Conditions.PROTECTED_POISON, )
 ], key=lambda item: item.condition.value)
 CONDITIONS = jax.tree.map(lambda *x: jnp.stack(x), *[convert(c, ConditionModArray) for c in CONDITIONS])
 
@@ -98,6 +103,22 @@ def copy(x):
 DEFAULT = jax.tree.map(copy, default_element)
 
 
+def reduce_damage_resist_vun(damage_resists, axis=0):
+    """
+    Damage Resistance and Vulnerability:
+        Resistance and then vulnerability are applied after all other modifiers to damage.
+
+    Resistance and Vulnerability: Here’s the order that you apply modifiers to damage:
+        (1) any relevant damage immunity,
+        (2) any addition or subtraction to the damage,
+        (3) one relevant damage resistance
+        (4) one relevant damage vulnerability.
+    Returns:
+
+    """
+    return jnp.max(damage_resists, axis=axis) * jnp.min(damage_resists, axis=axis)
+
+
 def reduce(a: ConditionModArray, axis=0) -> ConditionModArray:
     """
     Reduces ConditionModArray along an axis
@@ -110,12 +131,12 @@ def reduce(a: ConditionModArray, axis=0) -> ConditionModArray:
         hitroll=ad_rule(a.hitroll),
         target_hitroll=ad_rule(a.target_hitroll),
         melee_target_hitroll=ad_rule(a.melee_target_hitroll),
-        melee_target_damage_mul=jnp.max(a.melee_target_damage_mul),
+        melee_target_auto_crit=a.melee_target_auto_crit.any(0),
         incapacitated=a.incapacitated.any(0),
         ability_check=ad_rule(a.ability_check),
         saving_throw=ad_rule(a.saving_throw),
         saving_throw_fail=a.saving_throw_fail.any(0),
-        damage_resistance=jnp.prod(a.damage_resistance, axis=0)
+        damage_resistance=reduce_damage_resist_vun(a.damage_resistance)
     )
 
 

@@ -31,7 +31,7 @@ def test_stack_reduce_poison_exhaustion():
     assert jnp.allclose(reduced.ability_check, RollType.DISADVANTAGE)
     assert jnp.allclose(reduced.saving_throw[Abilities.WIS], RollType.DISADVANTAGE)
     assert jnp.allclose(reduced.saving_throw_fail, False)
-    assert reduced.melee_target_damage_mul == 1.
+    assert reduced.melee_target_auto_crit == False
     assert jnp.allclose(reduced.damage_resistance, 1.)
 
 
@@ -47,7 +47,7 @@ def test_stack_reduce_blinded_invisible():
     assert jnp.allclose(reduced.ability_check, RollType.NORMAL)
     assert jnp.allclose(reduced.saving_throw, RollType.NORMAL)
     assert jnp.allclose(reduced.saving_throw_fail, False)
-    assert reduced.melee_target_damage_mul == 1.
+    assert reduced.melee_target_auto_crit == False
     assert jnp.allclose(reduced.damage_resistance, 1.)
 
 
@@ -56,6 +56,7 @@ def test_attack_condition_modifiers():
     target = map_reduce(as_bool_array(Conditions.PARALYZED))
     hitroll_type_mod = hitroll_adv_dis(source, target)
     assert hitroll_type_mod == RollType.NORMAL
+    assert target.melee_target_auto_crit
 
     source = map_reduce(as_bool_array(Conditions.INVISIBLE))
     target = map_reduce(as_bool_array(Conditions.INVISIBLE))

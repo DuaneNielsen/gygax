@@ -13,7 +13,7 @@ import conditions
 from character import CharacterExtra, stack_party
 from actions import ActionEntry, ActionArray, action_table, Actions
 from constants import HitrollType, N_PLAYERS, N_CHARACTERS, Abilities, SaveFreq
-from conditions import Conditions, map_reduce, hitroll_adv_dis, ConditionModArray
+from conditions import Conditions, map_reduce, hitroll_adv_dis, ConditionModArray, reduce_damage_resist_vun
 from dnd5e import ActionTuple, decode_action
 from pgx.core import Array
 from character import DamageType
@@ -21,7 +21,7 @@ from to_jax import JaxStringArray
 import numpy as np
 from functools import partial
 from dataclasses import field
-from dice import cdf_20, RollType
+from dice import cdf_20, RollType, ad_rule
 
 
 
@@ -210,7 +210,7 @@ def update_conditions(effect_active, effects):
 
 
 def hitroll(source: Character, target: Character, weapon: ActionArray, roll_type: RollType = RollType.NORMAL,
-            crit: int = 20):
+            crit: int = 20, auto_crit=False):
     """
 
     Args:
@@ -219,6 +219,7 @@ def hitroll(source: Character, target: Character, weapon: ActionArray, roll_type
         weapon: the action used
         roll_type: NORMAL | ADVANTAGE | DISADVANTAGE
         crit: rolling equal  or higher is considered a crit for double damage, default 20
+        auto_crit: any hit automatically crits
 
     Returns: hit_chance -> probability of hit
              hit_dmg -> multiplier for expected damage
@@ -232,6 +233,8 @@ def hitroll(source: Character, target: Character, weapon: ActionArray, roll_type
     hit_prob = cdf_20(crit - 1, roll_type) - cdf_20(effective_ac-1, roll_type)
     crit_prob = 1. - cdf_20(crit - 1, roll_type)
     hit_chance = hit_prob + crit_prob
+    hit_prob = jnp.where(auto_crit, 0, hit_prob)
+    crit_prob = jnp.where(auto_crit, hit_chance, crit_prob)
     hit_dmg = hit_prob + crit_prob * 2
     return hit_chance, hit_dmg, (hit_prob, crit_prob)
 
@@ -248,12 +251,17 @@ def step(state: State, action: Array):
     state = break_concentration(state, weapon.req_concentration & source.concentrating.any(-1), action.source)
     state.character.conditions = update_conditions(state.character.effect_active, state.character.effects)
 
+    # initialize condition modifiers
     source_condition_mods = map_reduce(source.conditions)
     target_condition_mods = map_reduce(target.conditions)
     hitroll_condition_mods = hitroll_adv_dis(source_condition_mods, target_condition_mods)
+    melee_hitroll_mod = ad_rule(jnp.stack([hitroll_condition_mods, target_condition_mods.melee_target_hitroll]))
+    is_melee_attack = weapon.hitroll_type == HitrollType.MELEE
+    hitroll_condition_mods = jnp.where(is_melee_attack, melee_hitroll_mod, hitroll_condition_mods)
+    auto_crit = is_melee_attack & target_condition_mods.melee_target_auto_crit
 
     # hit_prob is the chance of a normal hit, crit_prob chance of crit, chance of hit is the sum of the two
-    hit_chance, hit_dmg, _ = hitroll(source, target, weapon, roll_type=hitroll_condition_mods)
+    hit_chance, hit_dmg, _ = hitroll(source, target, weapon, roll_type=hitroll_condition_mods, auto_crit=auto_crit)
     hit_dmg = jnp.where(weapon.req_hitroll, hit_dmg, 1.)
     weapon.recurring_damage_hitroll = hit_chance
 
@@ -271,7 +279,10 @@ def step(state: State, action: Array):
 
     # damage from action
     damage = weapon.damage + jnp.where(weapon.ability_mod_damage, source_ability_bonus, 0)
-    damage = damage * hit_dmg * save_mul * target.damage_type_mul[weapon.damage_type]
+    damage_resist_vun = reduce_damage_resist_vun(jnp.stack(
+        [target.damage_type_mul[weapon.damage_type], target_condition_mods.damage_resistance[weapon.damage_type]]))
+    damage = damage * hit_dmg * save_mul * damage_resist_vun
+
     state.character.hp = state.character.hp.at[*action.target].subtract(damage)
 
     # target makes concentration check on hit
