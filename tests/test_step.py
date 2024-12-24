@@ -1,11 +1,11 @@
 import conditions
 import constants
 from step import hitroll
-from step import init, step, State, Character, save_fail
-from actions import action_table, Actions
+from step import init, step, State, save_fail
+from actions import action_table, ActionsEnum
 from dice import RollType
 from dnd5e import encode_action, ActionTuple, decode_action
-from character import CharacterExtra
+from character import CharacterExtra, Character
 from to_jax import convert, JaxStringArray
 from constants import Abilities
 from dnd_character import CLASSES
@@ -20,11 +20,11 @@ from constants import Party
 
 
 def d_hp_target(state: State, next_state: State, action):
-    action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
+    action = decode_action(action, state.current_player, state.pos, n_actions=len(ActionsEnum))
     return state.character.hp[*action.target] - next_state.character.hp[*action.target]
 
 def d_hp_source(state: State, next_state: State, action):
-    action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
+    action = decode_action(action, state.current_player, state.pos, n_actions=len(ActionsEnum))
     return state.character.hp[*action.source] - next_state.character.hp[*action.source]
 
 
@@ -227,7 +227,7 @@ def test_hitroll(party):
 
     state = init(party)
     state, action, (src, tgt), (hit_prob, crit_prob) = make_action(state, party, riverwind, 'longsword', clarion)
-    action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
+    action = decode_action(action, state.current_player, state.pos, n_actions=len(ActionsEnum))
     source = jax.tree.map(lambda x: x[*action.source], state.character)
     weapon = jax.tree.map(lambda action_items: action_items[action.action], action_table)
     target: Character = jax.tree.map(lambda x: x[*action.target], state.character)
@@ -277,9 +277,9 @@ def make_action(state, party, source, action_str, target, roll_type: RollType = 
     state = state.replace(current_player=source[0])
     target_char_party = 1 if source[0] != target[0] else 0
     target_char_idx = target[1]
-    action = Actions[action_str]
-    encoded_action = encode_action(action, source_char_idx, target_char_party, target_char_idx, n_actions=len(Actions))
-    action = decode_action(encoded_action, state.current_player, state.pos, n_actions=len(Actions))
+    action = ActionsEnum[action_str]
+    encoded_action = encode_action(action, source_char_idx, target_char_party, target_char_idx, n_actions=len(ActionsEnum))
+    action = decode_action(encoded_action, state.current_player, state.pos, n_actions=len(ActionsEnum))
     source = jax.tree.map(lambda x: x[*source], state.character)
     weapon = jax.tree.map(lambda action_items: action_items[action.action], action_table)
     target: Character = jax.tree.map(lambda x: x[target_char_party, target_char_idx], state.character)

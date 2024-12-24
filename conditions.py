@@ -3,12 +3,66 @@ from enum import IntEnum, auto
 import chex
 import dataclasses
 from dataclasses import field
-from typing import List
+from typing import List, Union, NamedTuple
 from constants import Abilities, DamageType
 import jax.numpy as jnp
 from to_jax import convert, JaxStringArray
 from dice import RollType, ad_rule
 import jax
+
+
+class Conditions(IntEnum):
+    BLINDED = 0
+    CHARMED = auto()
+    DEAFENED = auto()
+    EXHAUSTION = auto()
+    FRIGHTENED = auto()
+    GRAPPLED = auto()
+    INCAPACITATED = auto()
+    INVISIBLE = auto()
+    PARALYZED = auto()
+    PETRIFIED = auto()
+    POISONED = auto()
+    PRONE = auto()
+    RESTRAINED = auto()
+    STUNNED = auto()
+    UNCONSCIOUS = auto()
+    PROTECTED_POISON = auto()
+    ILLUMINATED = auto()
+
+
+class ConditionUpdate(NamedTuple):
+    condition: Conditions
+    value: bool = False
+
+
+class ConditionState:
+    def __init__(self, **kwargs):
+        self.select: List[bool] = [False] * len(Conditions)
+        self.value: List[bool] = [False] * len(Conditions)
+        for condition, value in kwargs.items():
+            i = Conditions[condition.upper()]
+            self.value[i] = value
+            self.select[i] = True
+
+    def jax(self):
+        return convert(self, ConditionStateArray)
+
+
+@chex.dataclass
+class ConditionStateArray:
+    """
+    Can be used to track and update the conditions on any character or object
+    """
+    select: jnp.bool
+    value: jnp.bool
+
+    def __add__(self, other):
+        if not isinstance(other, ConditionStateArray):
+            return NotImplemented
+        else:
+            value = (self.value & ~other.select) | (other.value & other.select)
+            return ConditionStateArray(select=self.select, value=value)
 
 
 @dataclasses.dataclass
@@ -53,25 +107,6 @@ DISADVANTAGE_DEX[Abilities.DEX] = RollType.DISADVANTAGE
 DISADVANTAGE_ALL = [RollType.DISADVANTAGE]* len(Abilities)
 
 
-class Conditions(IntEnum):
-    BLINDED = 0
-    CHARMED = auto()
-    DEAFENED = auto()
-    EXHAUSTION = auto()
-    FRIGHTENED = auto()
-    GRAPPLED = auto()
-    INCAPACITATED = auto()
-    INVISIBLE = auto()
-    PARALYZED = auto()
-    PETRIFIED = auto()
-    POISONED = auto()
-    PRONE = auto()
-    RESTRAINED = auto()
-    STUNNED = auto()
-    UNCONSCIOUS = auto()
-    PROTECTED_POISON = auto()
-
-
 CONDITIONS = sorted([
     ConditionMod('blinded', Conditions.BLINDED, hitroll=RollType.DISADVANTAGE, target_hitroll=RollType.ADVANTAGE),
     ConditionMod('charmed', Conditions.CHARMED),
@@ -88,8 +123,15 @@ CONDITIONS = sorted([
     ConditionMod('restrained', Conditions.RESTRAINED, hitroll=RollType.DISADVANTAGE, target_hitroll=RollType.ADVANTAGE, saving_throw=DISADVANTAGE_DEX),
     ConditionMod('stunned', Conditions.STUNNED, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, target_hitroll=RollType.ADVANTAGE),
     ConditionMod('unconscious', Conditions.UNCONSCIOUS, incapacitated=True, saving_throw_fail=FAIL_STR_DEX, target_hitroll=RollType.ADVANTAGE, melee_target_auto_crit=True),
-    ConditionMod('protected-poison', Conditions.PROTECTED_POISON, )
+    ConditionMod('illuminated', Conditions.ILLUMINATED, target_hitroll=RollType.ADVANTAGE),
+    ConditionMod('protected_poison', Conditions.PROTECTED_POISON)
 ], key=lambda item: item.condition.value)
+
+for condition in Conditions:
+    condition_table_entries = {c.condition for c in CONDITIONS}
+    if condition not in condition_table_entries:
+        raise Exception(f'Condition table missing {condition.name}')
+
 CONDITIONS = jax.tree.map(lambda *x: jnp.stack(x), *[convert(c, ConditionModArray) for c in CONDITIONS])
 
 default_element = convert(ConditionMod(name='default', condition=-1), ConditionModArray)
@@ -140,13 +182,13 @@ def reduce(a: ConditionModArray, axis=0) -> ConditionModArray:
     )
 
 
-def map_reduce(conditions: jnp.bool) -> ConditionModArray:
+def map_reduce(conditions: ConditionStateArray) -> ConditionModArray:
 
     # Create mask by broadcasting conditions to match the shape of each field
     def select_values(cond_val, default_val):
         # Ensure the selection mask matches the shape of the values
         mask_shape = [len(Conditions)] + [1] * (len(cond_val.shape) - 1)
-        mask = jnp.broadcast_to(conditions.reshape(mask_shape), cond_val.shape)
+        mask = jnp.broadcast_to(conditions.value.reshape(mask_shape), cond_val.shape)
         return jnp.where(mask, cond_val, default_val)
 
     map = jax.tree.map(select_values, CONDITIONS, DEFAULT)

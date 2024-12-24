@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 
 import conditions
+from conditions import ConditionState, ConditionStateArray
 import constants
-from actions import ActionEntry, WeaponRange, unarmed
-from to_jax import C, convert
+from actions import ActionEntry, WeaponRange, unarmed, ActionArray
+from to_jax import C, convert, JaxStringArray
 from tree_serialization import CumBinType, OneHotType
 import chex
 from dnd_character import Character
@@ -199,6 +200,8 @@ class Abilities:
 
 class CharacterExtra(Character):
     def __init__(self, *args, **kwargs):
+        if 'name' not in kwargs:
+            kwargs['name'] = ''
         super().__init__(*args, **kwargs)
         self.ability_modifier = Abilities(
             strength=self.get_ability_modifier(self.strength),
@@ -219,13 +222,15 @@ class CharacterExtra(Character):
         self._ranged_two_hand = None
         self._armor = None
 
-        self.conditions = [False] * len(conditions.Conditions)
-        self.effect_active = [False] * constants.N_EFFECTS
+        self.conditions = ConditionState()
         self.effects = [ActionEntry()] * constants.N_EFFECTS
 
         self.concentrating = [False] * constants.MAX_TARGETS
         self.concentration_ref = [[0, 0, 0]] * constants.MAX_TARGETS # player, character, effect_slot
         self.concentration_check_cum = 1.0
+
+    def jax(self):
+        return convert(self, Character)
 
     @property
     def hp(self):
@@ -461,6 +466,8 @@ class CharacterExtra(Character):
             return None
 
 
+
+
 from typing import Dict, List
 
 
@@ -492,3 +499,42 @@ def stack_party(party: Dict[str, List[CharacterExtra]], clazz: C) -> C:
     for i in range(2):
         parties += [jax.tree.map(stack, *jax_party[i])]
     return jax.tree.map(stack, *parties)
+
+
+def add_damage_modifiers(a, b):
+    damage_mods = jnp.stack([a, b])
+    return jnp.max(damage_mods, axis=0) * jnp.min(damage_mods, axis=0)
+
+@chex.dataclass
+class Character:
+    name: JaxStringArray
+    hp: jnp.float16
+    ac: jnp.int8
+    prof_bonus: jnp.int8
+    ability_mods: jnp.int8
+    attack_ability_mods: jnp.int8
+    save_bonus: jnp.int8
+    damage_type_mul: jnp.float16
+    conditions: ConditionStateArray
+    effects: ActionArray
+    concentrating: jnp.bool
+    concentration_ref: jnp.int8
+    concentration_check_cum: jnp.float16
+
+    def __add__(self, b):
+        return Character(
+            name=self.name,
+            hp=self.hp + b.hp,
+            ac=self.ac + b.ac,
+            prof_bonus=self.prof_bonus + b.prof_bonus,
+            ability_mods=self.ability_mods + b.ability_mods,
+            save_bonus=self.save_bonus + b.save_bonus,
+            damage_type_mul=add_damage_modifiers(self.damage_type_mul, b.damage_type_mul),
+            conditions=self.conditions + b.conditions,
+            effects=jax.vmap(lambda x, y: x + y, self, b),
+        )
+
+
+
+
+

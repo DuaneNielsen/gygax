@@ -1,48 +1,19 @@
-import dataclasses
 import jax
 import jax.numpy as jnp
-import pgx
-import chex
-from enum import IntEnum, auto
-from typing import List, Dict, Tuple
+from typing import Dict
 from pgx import EnvId
 
-import actions
-import character
 import conditions
-from character import CharacterExtra, stack_party
-from actions import ActionEntry, ActionArray, action_table, Actions
-from constants import HitrollType, N_PLAYERS, N_CHARACTERS, Abilities, SaveFreq
-from conditions import Conditions, map_reduce, hitroll_adv_dis, ConditionModArray, reduce_damage_resist_vun
-from dnd5e import ActionTuple, decode_action
+from character import CharacterExtra, stack_party, Character
+from actions import ActionArray, action_table
+from constants import HitrollType, N_PLAYERS, N_CHARACTERS, Abilities
+from conditions import map_reduce, hitroll_adv_dis, ConditionModArray, reduce_damage_resist_vun
+from dnd5e import ActionTuple, decode_action, Actions
 from pgx.core import Array
-from character import DamageType
 from to_jax import JaxStringArray
 import numpy as np
 from functools import partial
-from dataclasses import field
 from dice import cdf_20, RollType, ad_rule
-
-
-
-
-@chex.dataclass
-class Character:
-    name: JaxStringArray
-    hp: jnp.float16
-    ac: jnp.int8
-    prof_bonus: jnp.int8
-    ability_mods: jnp.int8
-    attack_ability_mods: jnp.int8
-    save_bonus: jnp.int8
-    damage_type_mul: jnp.float16
-    conditions: jnp.bool
-    effect_active: jnp.bool
-    effects: ActionArray
-    concentrating: jnp.bool
-    concentration_ref: jnp.int8
-    concentration_check_cum: jnp.float16
-
 
 import pgx._src.struct
 
@@ -240,6 +211,20 @@ def hitroll(source: Character, target: Character, weapon: ActionArray, roll_type
 
 
 def step(state: State, action: Array):
+    """
+
+    Args:
+        state:
+        action:
+
+    Returns:
+
+    """
+
+    """
+    Setup variables
+    """
+
     action = decode_action(action, state.current_player, state.pos, n_actions=len(Actions))
     source: Character = jax.tree.map(lambda x: x[*action.source], state.character)
     weapon: ActionArray = jax.tree.map(lambda action_items: action_items[action.action], action_table)
@@ -259,6 +244,10 @@ def step(state: State, action: Array):
     is_melee_attack = weapon.hitroll_type == HitrollType.MELEE
     hitroll_condition_mods = jnp.where(is_melee_attack, melee_hitroll_mod, hitroll_condition_mods)
     auto_crit = is_melee_attack & target_condition_mods.melee_target_auto_crit
+
+    """
+    Action d_Character
+    """
 
     # hit_prob is the chance of a normal hit, crit_prob chance of crit, chance of hit is the sum of the two
     hit_chance, hit_dmg, _ = hitroll(source, target, weapon, roll_type=hitroll_condition_mods, auto_crit=auto_crit)

@@ -273,3 +273,19 @@ def test_equip_armor():
 
     with pytest.raises(AssertionError) as exc_info:
         fighter.armor = Item('crossbow-light')
+
+def test_convert():
+    fighter = CharacterExtra(
+        classs=CLASSES["fighter"],
+        strength=16,
+        dexterity=12,
+        constitution=16,
+        intelligence=8,
+        wisdom=12,
+        charisma=8
+    )
+    fighter.armor = Item('chain-mail')
+    fighter.off_hand = Item('shield')
+
+    fighter_jax = fighter.jax()
+    print(fighter_jax.conditions)
